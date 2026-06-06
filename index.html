@@ -187,136 +187,49 @@ const S = {
 };
 let isListening = false, debounce = null;
 
-// ─── Detecção de layers ───────────────────────────────────────────────────────
-// Estratégia em cascata — do mais confiável ao mais amplo.
-// rawSections é a fonte mais robusta: contém feições desenhadas/importadas
-// com properties.layerId que é exatamente o nome passado a getLayerContents.
+// ─── Layer: capturar do elemento selecionado ou entrada manual ───────────────
+// Abordagem simples e robusta: sem detecção automática, sem RPC no init.
+// O usuário digita o nome do layer ou captura a partir de um elemento selecionado.
 
-function getLayersFromRawSections() {
-  const raw = giraffeState.get('rawSections') || [];
-  const ids = new Set();
-  raw.forEach(f => {
-    // O layerId pode vir em diferentes posições dependendo da versão do SDK
-    const id = f?.properties?.layerId
-            || f?.properties?.layer
-            || f?.layerId;
-    if (id && typeof id === 'string' && !id.startsWith(LAYER_OUT)) {
-      ids.add(id);
-    }
-  });
-  return [...ids].sort();
-}
-
-function getLayersFromGiraffeState() {
-  // giraffeState pode expor 'layers' ou 'projectLayers' dependendo da versão
-  const layers = giraffeState.get('layers')
-              || giraffeState.get('projectLayers')
-              || [];
-  const names = new Set();
-  (Array.isArray(layers) ? layers : Object.values(layers)).forEach(l => {
-    const n = l?.name || l?.id || l?.layerId;
-    if (n && typeof n === 'string' && !n.startsWith(LAYER_OUT)) names.add(n);
-  });
-  return [...names].sort();
-}
-
-function fetchAvailableLayers() {
-  // Fonte 1: rawSections — layerId de cada feição (sem RPC, instantâneo)
-  const fromRaw = getLayersFromRawSections();
-
-  // Fonte 2: giraffeState.layers / projectLayers (sem RPC, instantâneo)
-  const fromState = getLayersFromGiraffeState();
-
-  // Unir sem duplicatas — sem chamadas RPC bloqueantes no init
-  const all = new Set([...fromRaw, ...fromState]);
-  return [...all].sort();
-}
-
-// ─── Renderizar dropdown + campo manual ───────────────────────────────────────
-function refreshLayerDropdown() {
-  const badge  = document.getElementById('layer-badge');
-  const sel    = document.getElementById('layer-select');
-  if (!sel) return;
-
-  badge.className = 'badge badge-warn';
-  badge.textContent = 'buscando...';
-
-  const layers = fetchAvailableLayers();   // síncrono agora
-  const prev   = S.layerName;
-
-  // Limpa e reconstrói o select
-  sel.innerHTML = '';
-  if (layers.length === 0) {
-    // Nenhum layer encontrado — mostra só o placeholder e dica de digitar
-    const ph = document.createElement('option');
-    ph.value = ''; ph.textContent = '— nenhum layer encontrado —'; ph.disabled = true;
-    sel.appendChild(ph);
-    sel.value = '';
-    badge.className = 'badge badge-warn';
-    badge.textContent = 'use o campo abaixo';
-    showManualInput(true);
-    return;
-  }
-
-  // Placeholder
-  const ph = document.createElement('option');
-  ph.value = ''; ph.textContent = '— selecione um layer —'; ph.disabled = true;
-  sel.appendChild(ph);
-
-  layers.forEach(name => {
-    const opt = document.createElement('option');
-    opt.value = name; opt.textContent = name;
-    sel.appendChild(opt);
-  });
-
-  // Restaurar seleção anterior
-  if (prev && layers.includes(prev)) {
-    sel.value = prev;
-    S.layerName = prev;
-    probeLayer(prev);                  // síncrono — sem await, não bloqueia
-  } else if (layers.length === 1) {
-    sel.value = layers[0];
-    S.layerName = layers[0];
-    probeLayer(layers[0]);             // síncrono — sem await, não bloqueia
-  } else {
-    sel.value = '';
-    badge.className = 'badge badge-warn';
-    badge.textContent = 'selecione';
-  }
-
-  // Mostra campo manual só se não achou layers
-  showManualInput(layers.length === 0);
-}
-
-function showManualInput(show) {
-  const row = document.getElementById('manual-row');
-  if (row) row.style.display = show ? '' : 'none';
-}
-
-// Conta feições do layer para badge — sem bloquear o app.
-// Estratégia: conta via rawSections (instantâneo), sem chamar getLayerContents.
-// getLayerContents em layers grandes do GeoSampa retorna milhares de features
-// e pode travar indefinidamente se chamado sem bounds no init.
-function probeLayer(name) {
+function setLayerName(name) {
+  if (!name) return;
+  S.layerName = name;
+  const input = document.getElementById('layer-input');
   const badge = document.getElementById('layer-badge');
-  if (!badge || !name) return;
-
-  // Contar via rawSections — rápido, sem RPC
-  const raw = giraffeState.get('rawSections') || [];
-  const n   = raw.filter(f => {
-    const lid = f?.properties?.layerId || f?.properties?.layer || f?.layerId;
-    return lid === name &&
-      (f.geometry?.type === 'Polygon' || f.geometry?.type === 'MultiPolygon');
-  }).length;
-
-  if (n > 0) {
+  if (input) input.value = name;
+  if (badge) {
     badge.className = 'badge badge-ok';
-    badge.textContent = `${n} polígonos`;
-  } else {
-    // rawSections pode não ter o layer ainda (ex: data layer importado)
-    // Mostra "pronto" sem bloquear — o erro real aparece só no compute
-    badge.className = 'badge badge-ok';
-    badge.textContent = 'layer selecionado ✓';
+    badge.textContent = 'layer: ' + name;
+  }
+}
+
+// Tenta ler o layerId do elemento atualmente selecionado no mapa
+async function captureLayerFromSelection() {
+  const badge = document.getElementById('layer-badge');
+  if (badge) { badge.className = 'badge badge-warn'; badge.textContent = 'lendo seleção...'; }
+  try {
+    // Tenta getSelectedFeatures primeiro
+    const selected = await rpc.invoke('getSelectedFeatures', []);
+    const feats = selected?.features || selected || [];
+    if (feats.length > 0) {
+      const f   = feats[0];
+      const lid = f?.properties?.layerId
+               || f?.properties?.layer
+               || f?.layerId;
+      if (lid) { setLayerName(lid); return; }
+    }
+    // Fallback: rawSections — pega o layerId do primeiro elemento selecionado
+    const raw = giraffeState.get('rawSections') || [];
+    const sel = raw.find(f => f?.properties?.selected || f?.selected);
+    if (sel) {
+      const lid = sel?.properties?.layerId || sel?.layerId;
+      if (lid) { setLayerName(lid); return; }
+    }
+    // Nada selecionado
+    if (badge) { badge.className = 'badge badge-warn'; badge.textContent = 'nada selecionado'; }
+  } catch(e) {
+    console.warn('[Isovist] captureLayerFromSelection:', e);
+    if (badge) { badge.className = 'badge badge-err'; badge.textContent = 'erro ao ler'; }
   }
 }
 
@@ -570,23 +483,14 @@ function buildUI() {
 
       <div class="layer-box">
         <div class="layer-row">
-          <span class="layer-lbl">Layer</span>
-          <select id="layer-select"><option value="">— carregando… —</option></select>
-          <button class="icon-btn" id="btn-refresh" title="Recarregar lista">↺</button>
+          <input type="text" class="text-input" id="layer-input"
+            placeholder="Nome do layer de edificações" />
+          <button class="icon-btn" id="btn-from-selection" title="Capturar layer do elemento selecionado no mapa">⊙</button>
         </div>
-        <div class="layer-row">
-          <span id="layer-badge" class="badge badge-warn">buscando...</span>
+        <div class="layer-row" style="gap:6px;flex-wrap:wrap">
+          <span id="layer-badge" class="badge badge-warn">sem layer</span>
+          <span class="manual-hint" style="flex:1">Selecione um elemento do layer no mapa e clique ⊙, ou digite o nome manualmente.</span>
         </div>
-
-        <!-- Campo manual: sempre visível como fallback -->
-        <div class="manual-row" id="manual-row">
-          <span class="manual-hint">⚠ Nenhum layer detectado automaticamente.<br>
-          Digite abaixo o nome exato do layer (como aparece na lista do Giraffe):</span>
-          <div class="layer-row" style="margin-top:2px">
-            <input type="text" class="text-input" id="manual-input"
-              placeholder="ex: Edificações GeoSampa" />
-            <button class="icon-btn" id="btn-manual-ok" title="Usar este nome">✓</button>
-          </div>
         </div>
       </div>
 
@@ -620,35 +524,21 @@ function buildUI() {
 
     </div>
 
-    <footer class="ftr"><p>Raycasting 2° · Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v5</strong></p></footer>
+    <footer class="ftr"><p>Raycasting 2° · Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v6</strong></p></footer>
   </div>`;
 
   // ── Wire controls ──────────────────────────────────────────────────────────
 
-  // Dropdown
-  document.getElementById('layer-select').addEventListener('change', e => {
-    S.layerName = e.target.value;
-    document.getElementById('manual-input').value = S.layerName;
-    probeLayer(S.layerName);   // síncrono
+  // Campo de texto manual
+  document.getElementById('layer-input').addEventListener('change', e => {
+    setLayerName(e.target.value.trim());
+  });
+  document.getElementById('layer-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') setLayerName(e.target.value.trim());
   });
 
-  // Botão refresh
-  document.getElementById('btn-refresh').addEventListener('click', refreshLayerDropdown);
-
-  // Campo manual + botão confirmar
-  document.getElementById('btn-manual-ok').addEventListener('click', () => {
-    const v = document.getElementById('manual-input').value.trim();
-    if (!v) return;
-    S.layerName = v;
-    const sel = document.getElementById('layer-select');
-    if (![...sel.options].some(o => o.value === v)) {
-      const opt = document.createElement('option');
-      opt.value = v; opt.textContent = v;
-      sel.appendChild(opt);
-    }
-    sel.value = v;
-    probeLayer(v);   // síncrono
-  });
+  // Botão capturar layer do elemento selecionado no mapa
+  document.getElementById('btn-from-selection').addEventListener('click', captureLayerFromSelection);
 
   // Sliders
   document.getElementById('sl-r').addEventListener('input', e => {
@@ -718,34 +608,12 @@ function initListeners() {
     await runCompute(geo);
   });
 
-  // Recarrega layers quando rawSections mudar (ex: GeoSampa import acabou)
-  giraffeState.addListener(['rawSections'], () => refreshLayerDropdown());
+  // (sem listener de rawSections — layer é definido manualmente pelo usuário)
 }
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 buildUI();
 initListeners();
-
-// rawSections chega assíncrono após o SDK inicializar.
-// Aguarda até ter dados ou 8s de timeout, depois atualiza o dropdown.
-function waitForRawSectionsAndRefresh() {
-  const raw = giraffeState.get('rawSections');
-  if (raw && raw.length > 0) {
-    refreshLayerDropdown();
-    return;
-  }
-  let attempts = 0;
-  const interval = setInterval(() => {
-    attempts++;
-    const r = giraffeState.get('rawSections');
-    if ((r && r.length > 0) || attempts >= 16) {
-      clearInterval(interval);
-      refreshLayerDropdown();
-    }
-  }, 500);
-}
-
-waitForRawSectionsAndRefresh();
 </script>
 </body>
 </html>
