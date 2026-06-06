@@ -620,7 +620,7 @@ function buildUI() {
 
     </div>
 
-    <footer class="ftr"><p>Raycasting 2° · Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v4</strong></p></footer>
+    <footer class="ftr"><p>Raycasting 2° · Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v5</strong></p></footer>
   </div>`;
 
   // ── Wire controls ──────────────────────────────────────────────────────────
@@ -725,7 +725,27 @@ function initListeners() {
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 buildUI();
 initListeners();
-refreshLayerDropdown();
+
+// rawSections chega assíncrono após o SDK inicializar.
+// Aguarda até ter dados ou 8s de timeout, depois atualiza o dropdown.
+function waitForRawSectionsAndRefresh() {
+  const raw = giraffeState.get('rawSections');
+  if (raw && raw.length > 0) {
+    refreshLayerDropdown();
+    return;
+  }
+  let attempts = 0;
+  const interval = setInterval(() => {
+    attempts++;
+    const r = giraffeState.get('rawSections');
+    if ((r && r.length > 0) || attempts >= 16) {
+      clearInterval(interval);
+      refreshLayerDropdown();
+    }
+  }, 500);
+}
+
+waitForRawSectionsAndRefresh();
 </script>
 </body>
 </html>
