@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Isovist — Giraffe App</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Hind:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { width: 100%; height: 100%; background: #0f1117; overflow: hidden; }
+
+    .app {
+      font-family: 'Hind', system-ui, sans-serif;
+      background: #0f1117; color: #e2e8f0;
+      height: 100vh; display: flex; flex-direction: column;
+      font-size: 13px; line-height: 1.5;
+    }
+
+    /* Header */
+    .hdr {
+      display: flex; align-items: center; gap: 10px;
+      padding: 11px 14px 9px; border-bottom: 1px solid #1e2433;
+      background: #0a0d14; flex-shrink: 0;
+    }
+    .hdr-ico { color: #00ACCD; display: flex; align-items: center; flex-shrink: 0; }
+    .hdr-title { font-size: 12.5px; font-weight: 600; color: #f0f4f8; letter-spacing: .02em; }
+    .hdr-sub { font-size: 9.5px; color: #3a4560; text-transform: uppercase; letter-spacing: .05em; margin-top: 1px; }
+
+    /* Status */
+    .status {
+      display: flex; align-items: center; gap: 7px;
+      padding: 6px 14px; font-size: 11.5px; font-weight: 500;
+      flex-shrink: 0; border-bottom: 1px solid transparent; transition: background .2s;
+    }
+    .status[data-s="idle"]    { display: none; }
+    .status[data-s="waiting"] { background: #0e1f2e; color: #00ACCD; border-color: #0d3050; }
+    .status[data-s="compute"] { background: #0e1e14; color: #4ade80; border-color: #0d3020; }
+    .status[data-s="done"]    { background: #0b1a12; color: #4ade80; border-color: #0d2810; }
+    .status[data-s="error"]   { background: #1e0e0e; color: #f87171; border-color: #3a1010; }
+
+    /* Observer card */
+    .obs-card {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 5px 14px; background: #0d1521;
+      border-bottom: 1px solid #1e2433; flex-shrink: 0;
+    }
+    .obs-lbl { font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: #3a4560; }
+    .obs-val { font-size: 10.5px; color: #00ACCD; font-family: monospace; }
+
+    /* Controls */
+    .controls {
+      flex: 1; padding: 12px 14px;
+      display: flex; flex-direction: column; gap: 10px;
+      overflow-y: auto;
+    }
+    .controls::-webkit-scrollbar { width: 3px; }
+    .controls::-webkit-scrollbar-thumb { background: #1e2433; border-radius: 2px; }
+
+    /* Buttons */
+    .btn {
+      width: 100%; padding: 9px 12px; border-radius: 6px;
+      font-size: 12.5px; font-weight: 600; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 7px;
+      transition: background .15s, opacity .15s; letter-spacing: .01em; border: none;
+    }
+    .btn-primary { border: 1px solid #00ACCD; background: #00ACCD18; color: #00ACCD; }
+    .btn-primary:hover:not(:disabled) { background: #00ACCD30; }
+    .btn-primary:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-cancel  { border: 1px solid #f59e0b; color: #f59e0b; background: #f59e0b10; }
+    .btn-cancel:hover { background: #f59e0b22; }
+    .btn-clear   { border: 1px solid #2d3748; background: transparent; color: #718096; }
+    .btn-clear:hover { background: #1e2433; color: #a0aec0; }
+
+    /* Divider */
+    .divider {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em;
+      color: #4a5568; margin-top: 3px;
+    }
+    .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: #1e2433; }
+
+    /* Layer selector */
+    .layer-selector-wrap { display: flex; flex-direction: column; gap: 5px; }
+    .layer-selector-label {
+      font-size: 11px; color: #8896a8;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .layer-selector-label button {
+      font-size: 9.5px; color: #3a4560; background: none; border: none;
+      cursor: pointer; padding: 0; text-decoration: underline; text-underline-offset: 2px;
+    }
+    .layer-selector-label button:hover { color: #00ACCD; }
+
+    select {
+      width: 100%; padding: 7px 10px;
+      background: #141921; border: 1px solid #1e2433;
+      border-radius: 6px; color: #c0ccd8;
+      font-size: 12px; font-family: inherit; cursor: pointer;
+      appearance: none; -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%234a5568' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 10px center;
+      padding-right: 30px;
+    }
+    select:focus { outline: none; border-color: #00ACCD60; }
+    select option { background: #141921; }
+
+    /* Slot count badge */
+    .feat-count {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 10px; color: #4ade80; background: #0b1a12;
+      border: 1px solid #0d2810; border-radius: 4px;
+      padding: 2px 7px;
+    }
+    .feat-count.warn { color: #f59e0b; background: #1a1200; border-color: #3a2800; }
+    .feat-count.err  { color: #f87171; background: #1e0e0e; border-color: #3a1010; }
+
+    /* Sliders */
+    .sl-grp { display: flex; flex-direction: column; gap: 5px; }
+    .sl-row  { display: flex; justify-content: space-between; align-items: center; }
+    .sl-lbl  { font-size: 11.5px; color: #8896a8; }
+    .sl-val  { font-size: 11.5px; font-weight: 600; color: #00ACCD; font-variant-numeric: tabular-nums; }
+    .sl-ticks { display: flex; justify-content: space-between; font-size: 9px; color: #2d3748; }
+
+    input[type=range] {
+      width: 100%; height: 3px; -webkit-appearance: none; appearance: none;
+      background: #1e2433; border-radius: 2px; outline: none; cursor: pointer;
+    }
+    input[type=range].thin { height: 2px; }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 14px; height: 14px;
+      border-radius: 50%; background: #00ACCD; border: 2px solid #0a0d14; box-shadow: 0 0 0 1px #00ACCD50;
+    }
+    input[type=range].thin::-webkit-slider-thumb { width: 11px; height: 11px; }
+    input[type=range]::-moz-range-thumb {
+      width: 14px; height: 14px; border-radius: 50%;
+      background: #00ACCD; border: 2px solid #0a0d14;
+    }
+
+    /* Band cards */
+    .band-card {
+      background: #141921; border: 1px solid #1e2433;
+      border-radius: 6px; padding: 8px 10px;
+      display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px;
+    }
+    .band-hdr { display: flex; align-items: center; gap: 8px; }
+    .swatch {
+      width: 9px; height: 9px; border-radius: 50%;
+      border: 1px solid rgba(255,255,255,.15); flex-shrink: 0;
+    }
+    .band-name { flex: 1; font-size: 11.5px; font-weight: 500; color: #c0ccd8; }
+    input[type=color] {
+      width: 24px; height: 18px; padding: 1px;
+      border: 1px solid #2d3748; border-radius: 3px;
+      background: #0f1117; cursor: pointer;
+    }
+    .bmeta { font-size: 10px; color: #3a4560; white-space: nowrap; }
+    .brow  { display: flex; align-items: center; gap: 6px; }
+    input[type=number] {
+      width: 60px; padding: 2px 6px;
+      background: #0f1117; border: 1px solid #1e2433;
+      border-radius: 4px; color: #8896a8;
+      font-size: 11.5px; text-align: right; font-variant-numeric: tabular-nums;
+    }
+    input[type=number]:disabled { opacity: .35; cursor: not-allowed; }
+    input[type=number]:focus { outline: none; border-color: #00ACCD60; }
+
+    /* Footer */
+    .ftr {
+      padding: 7px 14px; border-top: 1px solid #1e2433;
+      background: #0a0d14; flex-shrink: 0;
+    }
+    .ftr p { font-size: 9px; color: #232c3d; text-align: center; letter-spacing: .03em; }
+
+    /* Animated indicators */
+    .pulse {
+      display: inline-block; width: 7px; height: 7px;
+      border-radius: 50%; background: currentColor;
+      animation: pulse-anim 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse-anim { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.35;transform:scale(.6)} }
+    .spinner {
+      display: inline-block; width: 10px; height: 10px;
+      border: 1.5px solid #4ade8040; border-top-color: #4ade80;
+      border-radius: 50%; animation: spin .7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="module">
+import { giraffeState, rpc } from 'https://esm.sh/@gi-nx/iframe-sdk@latest';
+import * as turf              from 'https://esm.sh/@turf/turf@6.5.0';
+
+// ─── Constantes ───────────────────────────────────────────────────────────────
+const LAYER_OUT  = 'isovist';   // prefixo das camadas de saída
+const RAY_STEP   = 2;           // graus entre raios
+const NUM_BANDS  = 3;
+
+// ─── Estado da aplicação ──────────────────────────────────────────────────────
+const S = {
+  status:     'idle',
+  statusMsg:  '',
+  observer:   null,       // [lng, lat]
+  layerName:  '',         // layer selecionado no dropdown
+  layerCount: 0,          // features no layer (para badge)
+  radius:     300,
+  cone:       360,
+  coneDir:    0,
+  bands: [
+    { label: 'Próximo',  dist: 100, color: '#00ACCD', opacity: 0.55 },
+    { label: 'Médio',    dist: 250, color: '#2DD4BF', opacity: 0.40 },
+    { label: 'Distante', dist: 500, color: '#64748B', opacity: 0.25 },
+  ],
+  rayCount:  0,
+  computeMs: null,
+};
+
+let isListening  = false;
+let debounceTimer = null;
+
+// ─── Extrair layers disponíveis do projeto ────────────────────────────────────
+// Combina rawSections (camadas de desenho) e getProjectBundle (camadas GeoJSON/data)
+async function fetchAvailableLayers() {
+  const names = new Set();
+
+  // 1. rawSections — camadas de desenho e importações permanentes
+  try {
+    const raw = giraffeState.get('rawSections') || [];
+    raw.forEach(f => {
+      const id = f?.properties?.layerId || f?.layerId;
+      if (id && id !== 'isovist') names.add(id);
+    });
+  } catch(e) { console.warn('[Isovist] rawSections:', e); }
+
+  // 2. getProjectBundle — inclui data layers (GeoJSON importados)
+  try {
+    const bundle = await rpc.invoke('getProjectBundle', []);
+    const layers = bundle?.layers || bundle?.project?.layers || [];
+    layers.forEach(l => {
+      const n = l?.name || l?.id;
+      if (n && !n.startsWith('isovist')) names.add(n);
+    });
+  } catch(e) { console.warn('[Isovist] getProjectBundle:', e); }
+
+  return [...names].sort();
+}
+
+// ─── Renderizar dropdown de layers ───────────────────────────────────────────
+async function refreshLayerDropdown() {
+  const sel = document.getElementById('layer-select');
+  if (!sel) return;
+
+  const layers = await fetchAvailableLayers();
+  const prev   = S.layerName;
+
+  sel.innerHTML = '';
+
+  if (layers.length === 0) {
+    sel.innerHTML = '<option value="">— nenhum layer encontrado —</option>';
+    S.layerName   = '';
+    updateLayerBadge(0, 'err');
+    return;
+  }
+
+  // Opção padrão
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = '— selecione um layer —';
+  placeholder.disabled = true;
+  sel.appendChild(placeholder);
+
+  layers.forEach(name => {
+    const opt = document.createElement('option');
+    opt.value       = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+
+  // Restaurar seleção anterior se ainda existir
+  if (prev && layers.includes(prev)) {
+    sel.value   = prev;
+    S.layerName = prev;
+  } else if (layers.length === 1) {
+    // Auto-selecionar se houver só um
+    sel.value   = layers[0];
+    S.layerName = layers[0];
+  } else {
+    sel.value   = '';
+    S.layerName = '';
+  }
+
+  if (S.layerName) await updateLayerFeatureCount(S.layerName);
+  else updateLayerBadge(0, 'warn');
+}
+
+async function updateLayerFeatureCount(layerName) {
+  if (!layerName) { updateLayerBadge(0, 'warn'); return; }
+  try {
+    const fc = await rpc.invoke('getLayerContents', [layerName]);
+    const n  = fc?.features?.length || 0;
+    S.layerCount = n;
+    updateLayerBadge(n, n > 0 ? 'ok' : 'warn');
+  } catch {
+    updateLayerBadge(0, 'err');
+  }
+}
+
+function updateLayerBadge(count, type) {
+  const badge = document.getElementById('layer-badge');
+  if (!badge) return;
+  badge.className = 'feat-count' + (type === 'warn' ? ' warn' : type === 'err' ? ' err' : '');
+  badge.textContent = type === 'err'
+    ? '⚠ sem acesso'
+    : type === 'warn'
+      ? count === 0 ? '0 feições' : 'selecione'
+      : `${count} feições`;
+}
+
+// ─── Geometry helpers ─────────────────────────────────────────────────────────
+function castRay(angleDeg, maxD, segments) {
+  const rad = angleDeg * Math.PI / 180;
+  const dx  = Math.cos(rad), dy = Math.sin(rad);
+  let minT  = 1;
+  for (const [ax, ay, bx, by] of segments) {
+    const sx = bx - ax, sy = by - ay;
+    const denom = dx * maxD * sy - dy * maxD * sx;
+    if (Math.abs(denom) < 1e-10) continue;
+    const t = (ax * sy - ay * sx) / denom;
+    const u = (ax * dy * maxD - ay * dx * maxD) / denom;
+    if (t >= 0 && t < minT && u >= 0 && u <= 1) minT = t;
+  }
+  return [dx * maxD * minT, dy * maxD * minT];
+}
+
+function extractSegments(projPolygons, searchR) {
+  const segs = [], r2 = searchR * searchR;
+  for (const rings of projPolygons) {
+    for (const ring of rings) {
+      for (let i = 0; i < ring.length - 1; i++) {
+        const [ax, ay] = ring[i], [bx, by] = ring[i + 1];
+        if (ax*ax+ay*ay > r2*4 && bx*bx+by*by > r2*4) continue;
+        segs.push([ax, ay, bx, by]);
+      }
+    }
+  }
+  return segs;
+}
+
+// ─── Núcleo isovist ───────────────────────────────────────────────────────────
+async function computeIsovist(observer, radius, cone, coneDir, bands, layerName) {
+  setStatus('compute', 'Buscando edificações...');
+
+  // 1. Carregar features do layer selecionado
+  let buildingFeatures = [];
+  if (layerName) {
+    try {
+      const fc = await rpc.invoke('getLayerContents', [layerName]);
+      buildingFeatures = (fc?.features || []).filter(f =>
+        f.geometry?.type === 'Polygon' || f.geometry?.type === 'MultiPolygon'
+      );
+    } catch(e) { console.warn('[Isovist] getLayerContents:', e); }
+  }
+
+  setStatus('compute', `${buildingFeatures.length} edifícios encontrados. Projetando...`);
+
+  // 2. Coletar coordenadas para projeção em batch
+  const allGeo = [];
+  const meta   = [];
+  for (const feat of buildingFeatures) {
+    const rings = feat.geometry.type === 'Polygon'
+      ? feat.geometry.coordinates
+      : feat.geometry.coordinates.flat();
+    let total = 0;
+    for (const ring of rings) {
+      for (const c of ring) { allGeo.push([c[0], c[1]]); total++; }
+    }
+    meta.push({ rings, total });
+  }
+
+  // 3. toProjected — batch único
+  const proj   = await rpc.invoke('toProjected', [observer, allGeo]);
+  const origin  = proj.origin;
+  const projPts = proj.points;
+
+  // helper: extrai x,y independente do formato {x,y} ou [x,y]
+  const px = p => Array.isArray(p) ? p[0] : p.x;
+  const py = p => Array.isArray(p) ? p[1] : p.y;
+  const ox = px(origin), oy = py(origin);
+
+  // Reconstruir polígonos projetados relativos ao observador (0,0)
+  const projPolygons = [];
+  let idx = 0;
+  for (const { rings } of meta) {
+    const projRings = [];
+    for (const ring of rings) {
+      const projRing = ring.map(() => {
+        const p = projPts[idx++];
+        return [px(p) - ox, py(p) - oy];
+      });
+      projRings.push(projRing);
+    }
+    projPolygons.push(projRings);
+  }
+
+  // 4. Segmentos de paredes
+  setStatus('compute', 'Extraindo paredes...');
+  const segs = extractSegments(projPolygons, radius * 1.5);
+
+  // 5. Raycasting
+  const is360    = cone >= 359.9;
+  const halfCone = cone / 2;
+  const start    = is360 ? 0   : coneDir - halfCone;
+  const end      = is360 ? 360 : coneDir + halfCone;
+  const angles   = [];
+  for (let a = start; a < end; a += RAY_STEP) angles.push(a);
+  if (!is360) angles.push(end);
+
+  setStatus('compute', `Disparando ${angles.length} raios...`);
+  const rayPts = angles.map(a => castRay(a, radius, segs));
+
+  // 6. Converter de volta para geo
+  const absRayPts = rayPts.map(([x, y]) => [x + ox, y + oy]);
+  const geoRayPts = await rpc.invoke('fromProjected', [origin, absRayPts]);
+
+  const visPoly = is360
+    ? [...geoRayPts, geoRayPts[0]]
+    : [observer, ...geoRayPts, observer];
+  const visTurf = turf.polygon([[...visPoly, visPoly[0]]]);
+
+  // 7. Fatiar bandas de distância
+  setStatus('compute', 'Fatiando faixas...');
+  const sortedBands = [...bands].sort((a, b) => a.dist - b.dist);
+  sortedBands[sortedBands.length - 1].dist = radius;
+
+  const obsPoint = turf.point(observer);
+  const bandGeos = [];
+  let prevBuf    = null;
+
+  for (let bi = 0; bi < sortedBands.length; bi++) {
+    const band   = sortedBands[bi];
+    const circle = turf.buffer(obsPoint, band.dist / 1000, { units: 'kilometers', steps: 64 });
+    let shape    = null;
+    try { shape = turf.intersect(turf.featureCollection([visTurf, circle])); } catch {}
+    if (!shape) continue;
+    if (prevBuf && bi > 0) {
+      try { const r = turf.difference(turf.featureCollection([shape, prevBuf])); if (r) shape = r; } catch {}
+    }
+    shape.properties = { band: band.label, color: band.color, opacity: band.opacity };
+    bandGeos.push({ shape, band });
+    try { prevBuf = turf.intersect(turf.featureCollection([visTurf, circle])); } catch { prevBuf = null; }
+  }
+
+  // 8. Renderizar no mapa
+  setStatus('compute', 'Renderizando...');
+  for (let bi = 0; bi < bandGeos.length; bi++) {
+    const { shape, band } = bandGeos[bi];
+    const fc = { type: 'FeatureCollection', features: [shape] };
+    const fillStyle = { type: 'fill', paint: { 'fill-color': band.color, 'fill-opacity': band.opacity } };
+    const lineStyle = { type: 'line', paint: { 'line-color': band.color, 'line-width': 1, 'line-opacity': Math.min(band.opacity + 0.15, 1) } };
+    for (const [name, style] of [[`${LAYER_OUT}_fill${bi}`, fillStyle], [`${LAYER_OUT}_line${bi}`, lineStyle]]) {
+      const fc2 = { type: 'FeatureCollection', features: [shape] };
+      try { await rpc.invoke('updateTempLayerGeoJSON', [name, fc2]); }
+      catch { try { await rpc.invoke('addTempLayerGeoJSON', [name, fc2, style]); } catch {} }
+    }
+  }
+
+  // Ponto observador
+  const obsFC  = { type: 'FeatureCollection', features: [turf.point(observer)] };
+  const obsStyle = { type: 'circle', paint: { 'circle-color': '#fff', 'circle-radius': 6, 'circle-stroke-color': '#000', 'circle-stroke-width': 2 } };
+  try { await rpc.invoke('updateTempLayerGeoJSON', [`${LAYER_OUT}_obs`, obsFC]); }
+  catch { try { await rpc.invoke('addTempLayerGeoJSON', [`${LAYER_OUT}_obs`, obsFC, obsStyle]); } catch {} }
+
+  return angles.length;
+}
+
+// ─── Limpar camadas de saída ──────────────────────────────────────────────────
+async function clearLayers() {
+  for (let i = 0; i < NUM_BANDS; i++) {
+    try { await rpc.invoke('removeTempLayer', [`${LAYER_OUT}_fill${i}`]); } catch {}
+    try { await rpc.invoke('removeTempLayer', [`${LAYER_OUT}_line${i}`]); } catch {}
+  }
+  try { await rpc.invoke('removeTempLayer', [`${LAYER_OUT}_obs`]); } catch {}
+}
+
+// ─── UI helpers ───────────────────────────────────────────────────────────────
+function setStatus(s, msg) {
+  S.status    = s;
+  S.statusMsg = msg;
+  const bar   = document.getElementById('status-bar');
+  const ico   = document.getElementById('s-ico');
+  const txt   = document.getElementById('s-txt');
+  if (!bar) return;
+  bar.setAttribute('data-s', s);
+  if (s === 'waiting') { ico.className = 'pulse'; txt.textContent = msg || 'Clique no mapa...'; }
+  else if (s === 'compute') { ico.className = 'spinner'; txt.textContent = msg; }
+  else if (s === 'done')    { ico.className = ''; ico.textContent = '✓'; txt.textContent = `${S.rayCount} raios · ${S.computeMs}ms`; }
+  else if (s === 'error')   { ico.className = ''; ico.textContent = '⚠'; txt.textContent = msg; }
+}
+
+function renderObserver() {
+  const card = document.getElementById('obs-card');
+  const val  = document.getElementById('obs-val');
+  if (!card || !val) return;
+  if (S.observer) {
+    card.style.display = 'flex';
+    val.textContent    = `${S.observer[1].toFixed(5)}, ${S.observer[0].toFixed(5)}`;
+  } else {
+    card.style.display = 'none';
+  }
+}
+
+function renderMainBtn() {
+  const btn = document.getElementById('btn-main');
+  if (!btn) return;
+  if (S.status === 'waiting') {
+    btn.className = 'btn btn-cancel';
+    btn.innerHTML = '<span class="pulse"></span> Aguardando clique no mapa...';
+    btn.disabled  = false;
+  } else if (S.status === 'compute') {
+    btn.className = 'btn btn-primary';
+    btn.innerHTML = '<span class="spinner"></span> Calculando...';
+    btn.disabled  = true;
+  } else {
+    btn.className = 'btn btn-primary';
+    btn.innerHTML = '◎ Ativar Ponto de Observação';
+    btn.disabled  = false;
+  }
+}
+
+function renderClearBtn() {
+  const btn = document.getElementById('btn-clear');
+  if (btn) btn.style.display = (S.status === 'done' || S.status === 'error') ? '' : 'none';
+}
+
+function scheduleRecompute() {
+  if (!S.observer || S.status === 'waiting') return;
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => runCompute(null), 350);
+}
+
+// ─── Executa o cálculo ────────────────────────────────────────────────────────
+async function runCompute(observer) {
+  const obs = observer || S.observer;
+  if (!obs) return;
+  if (!S.layerName) {
+    setStatus('error', 'Selecione um layer de edificações primeiro.');
+    renderMainBtn(); renderClearBtn(); return;
+  }
+  S.observer = obs;
+  renderObserver();
+
+  const t0 = performance.now();
+  try {
+    const rays    = await computeIsovist(obs, S.radius, S.cone, S.coneDir, S.bands, S.layerName);
+    S.rayCount    = rays;
+    S.computeMs   = Math.round(performance.now() - t0);
+    setStatus('done', '');
+  } catch(err) {
+    console.error('[Isovist]', err);
+    setStatus('error', String(err));
+  }
+  renderMainBtn(); renderClearBtn();
+}
+
+// ─── Ativar ponto ─────────────────────────────────────────────────────────────
+async function activate() {
+  if (S.status === 'compute') return;
+  if (S.status === 'waiting') {
+    isListening = false;
+    setStatus('idle', ''); renderMainBtn(); renderClearBtn(); return;
+  }
+  if (!S.layerName) {
+    setStatus('error', 'Selecione um layer de edificações antes.');
+    renderMainBtn(); renderClearBtn(); return;
+  }
+  isListening = true;
+  setStatus('waiting', 'Clique no mapa para posicionar o observador...');
+  renderMainBtn();
+
+  try {
+    const pt = await rpc.invoke('drawPoint', []);
+    if (!isListening) return;
+    if (pt) {
+      isListening = false;
+      await runCompute(Array.isArray(pt) ? pt : [pt.lng ?? pt[0], pt.lat ?? pt[1]]);
+    }
+  } catch {
+    console.warn('[Isovist] drawPoint indisponível, aguardando mapSelectCoord...');
+  }
+}
+
+async function clearAll() {
+  clearTimeout(debounceTimer);
+  S.status = 'idle'; S.observer = null; S.statusMsg = ''; S.computeMs = null;
+  setStatus('idle', ''); renderObserver(); renderMainBtn(); renderClearBtn();
+  await clearLayers();
+}
+
+// ─── Build DOM ────────────────────────────────────────────────────────────────
+function buildUI() {
+  document.getElementById('root').innerHTML = `
+    <div class="app">
+
+      <header class="hdr">
+        <span class="hdr-ico">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <circle cx="10" cy="10" r="2.5" fill="currentColor"/>
+            <path d="M10 10 L18 5"  stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".7"/>
+            <path d="M10 10 L17 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".55"/>
+            <path d="M10 10 L14 18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".4"/>
+            <path d="M10 10 L5 17"  stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".3"/>
+            <path d="M10 10 L2 10"  stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".2"/>
+            <path d="M10 10 L5 2"   stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".3"/>
+            <path d="M10 10 L13 1"  stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".45"/>
+          </svg>
+        </span>
+        <div>
+          <div class="hdr-title">Isovist / View Rose</div>
+          <div class="hdr-sub">Análise de campo visual urbano</div>
+        </div>
+      </header>
+
+      <div class="status" id="status-bar" data-s="idle">
+        <span id="s-ico"></span><span id="s-txt"></span>
+      </div>
+
+      <div class="obs-card" id="obs-card" style="display:none">
+        <span class="obs-lbl">Observador</span>
+        <span class="obs-val" id="obs-val">—</span>
+      </div>
+
+      <div class="controls">
+
+        <!-- Layer selector -->
+        <div class="divider"><span>Layer de obstáculos</span></div>
+
+        <div class="layer-selector-wrap">
+          <div class="layer-selector-label">
+            <span>Layer de edificações</span>
+            <button id="btn-refresh-layers" title="Recarregar lista de layers">↺ atualizar</button>
+          </div>
+          <select id="layer-select">
+            <option value="">— carregando layers… —</option>
+          </select>
+          <span id="layer-badge" class="feat-count warn">selecione</span>
+        </div>
+
+        <!-- Ação principal -->
+        <div class="divider"><span>Análise</span></div>
+
+        <button class="btn btn-primary" id="btn-main">◎ Ativar Ponto de Observação</button>
+        <button class="btn btn-clear"   id="btn-clear" style="display:none">✕ Limpar análise</button>
+
+        <!-- Parâmetros -->
+        <div class="divider"><span>Parâmetros de visão</span></div>
+
+        <div class="sl-grp">
+          <div class="sl-row">
+            <span class="sl-lbl">Raio máximo</span>
+            <span class="sl-val" id="lbl-r">300m</span>
+          </div>
+          <input type="range" id="sl-r" min="50" max="1000" step="25" value="300"/>
+          <div class="sl-ticks"><span>50m</span><span>500m</span><span>1km</span></div>
+        </div>
+
+        <div class="sl-grp">
+          <div class="sl-row">
+            <span class="sl-lbl">Abertura do cone</span>
+            <span class="sl-val" id="lbl-c">360° (View Rose)</span>
+          </div>
+          <input type="range" id="sl-c" min="10" max="360" step="5" value="360"/>
+          <div class="sl-ticks"><span>10°</span><span>180°</span><span>360°</span></div>
+        </div>
+
+        <div class="sl-grp" id="grp-dir" style="display:none">
+          <div class="sl-row">
+            <span class="sl-lbl">Direção do cone</span>
+            <span class="sl-val" id="lbl-d">0°</span>
+          </div>
+          <input type="range" id="sl-d" min="0" max="355" step="5" value="0"/>
+          <div class="sl-ticks"><span>E</span><span>N/S</span><span>W</span></div>
+        </div>
+
+        <!-- Faixas de distância -->
+        <div class="divider"><span>Faixas de distância</span></div>
+        <div id="bands-wrap"></div>
+
+      </div>
+
+      <footer class="ftr">
+        <p>Raycasting 2° · Turf.js · Giraffe iFrame SDK</p>
+      </footer>
+    </div>
+  `;
+
+  // ── Wire controls ──────────────────────────────────────────────────────────
+  document.getElementById('layer-select').addEventListener('change', async e => {
+    S.layerName = e.target.value;
+    await updateLayerFeatureCount(S.layerName);
+  });
+
+  document.getElementById('btn-refresh-layers').addEventListener('click', () => refreshLayerDropdown());
+
+  document.getElementById('sl-r').addEventListener('input', e => {
+    S.radius = +e.target.value;
+    document.getElementById('lbl-r').textContent = S.radius + 'm';
+    const lastDist = document.getElementById(`bd-${NUM_BANDS - 1}`);
+    if (lastDist) lastDist.value = S.radius;
+    scheduleRecompute();
+  });
+
+  document.getElementById('sl-c').addEventListener('input', e => {
+    S.cone = +e.target.value;
+    const is360 = S.cone >= 359.9;
+    document.getElementById('lbl-c').textContent = is360 ? '360° (View Rose)' : S.cone + '°';
+    document.getElementById('grp-dir').style.display = is360 ? 'none' : '';
+    scheduleRecompute();
+  });
+
+  document.getElementById('sl-d').addEventListener('input', e => {
+    S.coneDir = +e.target.value;
+    document.getElementById('lbl-d').textContent = S.coneDir + '°';
+    scheduleRecompute();
+  });
+
+  document.getElementById('btn-main').addEventListener('click', activate);
+  document.getElementById('btn-clear').addEventListener('click', clearAll);
+
+  // ── Bandas de distância ────────────────────────────────────────────────────
+  const wrap = document.getElementById('bands-wrap');
+  S.bands.forEach((band, i) => {
+    const isLast = i === S.bands.length - 1;
+    const card   = document.createElement('div');
+    card.className = 'band-card';
+    card.innerHTML = `
+      <div class="band-hdr">
+        <div class="swatch" id="sw-${i}" style="background:${band.color}"></div>
+        <span class="band-name">${band.label}</span>
+        <input type="color" id="bc-${i}" value="${band.color}" title="Cor da faixa ${band.label}"/>
+      </div>
+      <div class="brow">
+        <span class="bmeta">Limite</span>
+        <input type="number" id="bd-${i}"
+          value="${isLast ? S.radius : band.dist}"
+          min="10" max="${S.radius}" step="10"
+          ${isLast ? 'disabled' : ''}/>
+        <span class="bmeta">m · Op.</span>
+        <input type="range" id="bo-${i}" class="thin"
+          min="0.05" max="0.85" step="0.05" value="${band.opacity}" style="flex:1"/>
+        <span class="bmeta" id="bol-${i}">${Math.round(band.opacity*100)}%</span>
+      </div>`;
+    wrap.appendChild(card);
+
+    document.getElementById(`bc-${i}`).addEventListener('input', e => {
+      S.bands[i].color = e.target.value;
+      document.getElementById(`sw-${i}`).style.background = e.target.value;
+      scheduleRecompute();
+    });
+    if (!isLast) {
+      document.getElementById(`bd-${i}`).addEventListener('change', e => {
+        S.bands[i].dist = +e.target.value; scheduleRecompute();
+      });
+    }
+    document.getElementById(`bo-${i}`).addEventListener('input', e => {
+      S.bands[i].opacity = +e.target.value;
+      document.getElementById(`bol-${i}`).textContent = Math.round(+e.target.value*100) + '%';
+      scheduleRecompute();
+    });
+  });
+}
+
+// ─── Listener mapSelectCoord (fallback) ───────────────────────────────────────
+function initListeners() {
+  giraffeState.addListener(['mapSelectCoord'], async () => {
+    if (!isListening) return;
+    const coord = giraffeState.get('mapSelectCoord');
+    if (!coord) return;
+    isListening = false;
+    const geo = Array.isArray(coord) ? coord : [coord.lng, coord.lat];
+    await runCompute(geo);
+  });
+
+  // Atualiza dropdown quando o projeto muda (ex: GeoSampa import adiciona layer)
+  giraffeState.addListener(['rawSections'], () => {
+    refreshLayerDropdown();
+  });
+}
+
+// ─── Bootstrap ────────────────────────────────────────────────────────────────
+buildUI();
+initListeners();
+refreshLayerDropdown();   // carrega os layers na abertura do app
+
+</script>
+</body>
+</html>
