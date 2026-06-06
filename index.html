@@ -220,31 +220,20 @@ function getLayersFromGiraffeState() {
   return [...names].sort();
 }
 
-async function fetchAvailableLayers() {
-  // Fonte 1: rawSections (mais confiável — sem permissão especial)
+function fetchAvailableLayers() {
+  // Fonte 1: rawSections — layerId de cada feição (sem RPC, instantâneo)
   const fromRaw = getLayersFromRawSections();
 
-  // Fonte 2: giraffeState.layers / projectLayers
+  // Fonte 2: giraffeState.layers / projectLayers (sem RPC, instantâneo)
   const fromState = getLayersFromGiraffeState();
 
-  // Fonte 3: getProjectBundle (pode falhar sem permissão — trata silenciosamente)
-  const fromBundle = [];
-  try {
-    const bundle = await rpc.invoke('getProjectBundle', []);
-    const arr = bundle?.layers || bundle?.project?.layers || [];
-    arr.forEach(l => {
-      const n = l?.name || l?.id;
-      if (n && !n.startsWith(LAYER_OUT)) fromBundle.push(n);
-    });
-  } catch { /* sem permissão — ignora */ }
-
-  // Unir todas as fontes sem duplicatas
-  const all = new Set([...fromRaw, ...fromState, ...fromBundle]);
+  // Unir sem duplicatas — sem chamadas RPC bloqueantes no init
+  const all = new Set([...fromRaw, ...fromState]);
   return [...all].sort();
 }
 
 // ─── Renderizar dropdown + campo manual ───────────────────────────────────────
-async function refreshLayerDropdown() {
+function refreshLayerDropdown() {
   const badge  = document.getElementById('layer-badge');
   const sel    = document.getElementById('layer-select');
   if (!sel) return;
@@ -252,7 +241,7 @@ async function refreshLayerDropdown() {
   badge.className = 'badge badge-warn';
   badge.textContent = 'buscando...';
 
-  const layers = await fetchAvailableLayers();
+  const layers = fetchAvailableLayers();   // síncrono agora
   const prev   = S.layerName;
 
   // Limpa e reconstrói o select
@@ -284,11 +273,11 @@ async function refreshLayerDropdown() {
   if (prev && layers.includes(prev)) {
     sel.value = prev;
     S.layerName = prev;
-    await probeLayer(prev);
+    probeLayer(prev);                  // síncrono — sem await, não bloqueia
   } else if (layers.length === 1) {
     sel.value = layers[0];
     S.layerName = layers[0];
-    await probeLayer(layers[0]);
+    probeLayer(layers[0]);             // síncrono — sem await, não bloqueia
   } else {
     sel.value = '';
     badge.className = 'badge badge-warn';
@@ -304,26 +293,30 @@ function showManualInput(show) {
   if (row) row.style.display = show ? '' : 'none';
 }
 
-// Conta feições do layer para badge
-async function probeLayer(name) {
+// Conta feições do layer para badge — sem bloquear o app.
+// Estratégia: conta via rawSections (instantâneo), sem chamar getLayerContents.
+// getLayerContents em layers grandes do GeoSampa retorna milhares de features
+// e pode travar indefinidamente se chamado sem bounds no init.
+function probeLayer(name) {
   const badge = document.getElementById('layer-badge');
   if (!badge || !name) return;
-  badge.className = 'badge badge-warn'; badge.textContent = '...';
-  try {
-    const fc = await rpc.invoke('getLayerContents', [name]);
-    const n  = fc?.features?.filter(f =>
-      f.geometry?.type === 'Polygon' || f.geometry?.type === 'MultiPolygon'
-    ).length || 0;
-    if (n > 0) {
-      badge.className = 'badge badge-ok';
-      badge.textContent = `${n} polígonos`;
-    } else {
-      badge.className = 'badge badge-warn';
-      badge.textContent = '0 polígonos';
-    }
-  } catch {
-    badge.className = 'badge badge-err';
-    badge.textContent = 'erro ao ler';
+
+  // Contar via rawSections — rápido, sem RPC
+  const raw = giraffeState.get('rawSections') || [];
+  const n   = raw.filter(f => {
+    const lid = f?.properties?.layerId || f?.properties?.layer || f?.layerId;
+    return lid === name &&
+      (f.geometry?.type === 'Polygon' || f.geometry?.type === 'MultiPolygon');
+  }).length;
+
+  if (n > 0) {
+    badge.className = 'badge badge-ok';
+    badge.textContent = `${n} polígonos`;
+  } else {
+    // rawSections pode não ter o layer ainda (ex: data layer importado)
+    // Mostra "pronto" sem bloquear — o erro real aparece só no compute
+    badge.className = 'badge badge-ok';
+    badge.textContent = 'layer selecionado ✓';
   }
 }
 
@@ -633,22 +626,20 @@ function buildUI() {
   // ── Wire controls ──────────────────────────────────────────────────────────
 
   // Dropdown
-  document.getElementById('layer-select').addEventListener('change', async e => {
+  document.getElementById('layer-select').addEventListener('change', e => {
     S.layerName = e.target.value;
-    // sincroniza campo manual
     document.getElementById('manual-input').value = S.layerName;
-    await probeLayer(S.layerName);
+    probeLayer(S.layerName);   // síncrono
   });
 
   // Botão refresh
   document.getElementById('btn-refresh').addEventListener('click', refreshLayerDropdown);
 
   // Campo manual + botão confirmar
-  document.getElementById('btn-manual-ok').addEventListener('click', async () => {
+  document.getElementById('btn-manual-ok').addEventListener('click', () => {
     const v = document.getElementById('manual-input').value.trim();
     if (!v) return;
     S.layerName = v;
-    // Adiciona ao select se não existir
     const sel = document.getElementById('layer-select');
     if (![...sel.options].some(o => o.value === v)) {
       const opt = document.createElement('option');
@@ -656,7 +647,7 @@ function buildUI() {
       sel.appendChild(opt);
     }
     sel.value = v;
-    await probeLayer(v);
+    probeLayer(v);   // síncrono
   });
 
   // Sliders
