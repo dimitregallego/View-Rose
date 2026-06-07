@@ -248,11 +248,17 @@ async function compute() {
 
     const fc = { type: 'FeatureCollection', features: [shape] };
 
-    // Remove + Add com estilo (garante cor atualizada)
+    // Renderizar como fill-extrusion (3D) na altura configurada
     await renderLayer(`${LO}_f${bi}`, fc, {
-      type: 'fill',
-      paint: { 'fill-color': band.color, 'fill-opacity': band.opacity }
+      type: 'fill-extrusion',
+      paint: {
+        'fill-extrusion-color': band.color,
+        'fill-extrusion-opacity': band.opacity,
+        'fill-extrusion-base': baseElev,
+        'fill-extrusion-height': baseElev + 0.5,
+      }
     });
+    // Contorno no chão (2D) para referência visual
     await renderLayer(`${LO}_l${bi}`, fc, {
       type: 'line',
       paint: { 'line-color': band.color, 'line-width': 1.2, 'line-opacity': Math.min(band.opacity + 0.2, 1) }
@@ -337,8 +343,10 @@ async function fromSel() {
     S.observer = c;
     S.observerLabel = 'Edifício selecionado';
     S.observerFeatId = f.properties?.id || null;
-    // Ler Base Height do edifício selecionado
+    // Ler Base Height do edifício selecionado e atualizar slider
     S.observerHeight = f.properties?._baseHeight || 0;
+    const slH = document.getElementById('sl-h');
+    if (slH) { slH.value = S.observerHeight; document.getElementById('lbl-h').textContent = S.observerHeight.toFixed(0) + 'm'; }
     renderObs(); await runCompute();
   } catch (e) { setStatus('error', String(e)); renderBtns(); }
 }
@@ -375,13 +383,14 @@ document.getElementById('root').innerHTML = `
     <div class="toggle-row"><button class="toggle" id="toggle-obs"></button><span class="toggle-label">Raycasting contra edifícios</span></div>
     <div class="info-box" id="info-obs">—</div>
     <div class="divider"><span>Parâmetros</span></div>
+    <div class="sl-grp"><div class="sl-row"><span class="sl-lbl">Altura do observador</span><span class="sl-val" id="lbl-h">0m</span></div><input type="range" id="sl-h" min="0" max="300" step="1" value="0"/><div class="sl-ticks"><span>0m</span><span>150m</span><span>300m</span></div></div>
     <div class="sl-grp"><div class="sl-row"><span class="sl-lbl">Raio máximo</span><span class="sl-val" id="lbl-r">300m</span></div><input type="range" id="sl-r" min="50" max="1000" step="25" value="300"/><div class="sl-ticks"><span>50m</span><span>500m</span><span>1km</span></div></div>
     <div class="sl-grp"><div class="sl-row"><span class="sl-lbl">Abertura do cone</span><span class="sl-val" id="lbl-c">360° (View Rose)</span></div><input type="range" id="sl-c" min="10" max="360" step="5" value="360"/><div class="sl-ticks"><span>10°</span><span>180°</span><span>360°</span></div></div>
     <div class="sl-grp" id="grp-dir" style="display:none"><div class="sl-row"><span class="sl-lbl">Direção do cone</span><span class="sl-val" id="lbl-d">0°</span></div><input type="range" id="sl-d" min="0" max="355" step="5" value="0"/><div class="sl-ticks"><span>E</span><span>N/S</span><span>W</span></div></div>
     <div class="divider"><span>Faixas de distância</span></div>
     <div id="bands-wrap"></div>
   </div>
-  <footer class="ftr"><p>100% Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v15</strong></p></footer>
+  <footer class="ftr"><p>100% Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v16</strong></p></footer>
 </div>`;
 
 // ── Wire ─────────────────────────────────────────────────────────────────────
@@ -389,6 +398,7 @@ document.getElementById('btn-sel').addEventListener('click', fromSel);
 document.getElementById('btn-point').addEventListener('click', fromMap);
 document.getElementById('btn-clear').addEventListener('click', clearAll);
 document.getElementById('toggle-obs').addEventListener('click', function () { S.useObs = !S.useObs; this.className = 'toggle' + (S.useObs ? ' on' : ''); scheduleRecompute(); });
+document.getElementById('sl-h').addEventListener('input', e => { S.observerHeight = +e.target.value; document.getElementById('lbl-h').textContent = S.observerHeight + 'm'; scheduleRecompute(); });
 document.getElementById('sl-r').addEventListener('input', e => { S.radius = +e.target.value; document.getElementById('lbl-r').textContent = S.radius + 'm'; const ld = document.getElementById(`bd-${S.bands.length - 1}`); if (ld) ld.value = S.radius; scheduleRecompute(); });
 document.getElementById('sl-c').addEventListener('input', e => { S.cone = +e.target.value; document.getElementById('lbl-c').textContent = S.cone >= 359.9 ? '360° (View Rose)' : S.cone + '°'; document.getElementById('grp-dir').style.display = S.cone >= 359.9 ? 'none' : ''; scheduleRecompute(); });
 document.getElementById('sl-d').addEventListener('input', e => { S.coneDir = +e.target.value; document.getElementById('lbl-d').textContent = S.coneDir + '°'; scheduleRecompute(); });
