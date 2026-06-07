@@ -193,11 +193,11 @@ function makeOpenField(obs, radiusM, coneAngle, coneDir) {
   return turf.polygon([[obs, ...pts, obs]]);
 }
 
-// ─── Renderizar via remove + addTempLayerGeoJSON (rápido, com estilo) ──────────
+// ─── Renderizar layer com estilo (remove+add para garantir atualização de cor) ─
 async function renderLayer(name, fc, style) {
   try { await rpc.invoke('removeTempLayer', [name]); } catch {}
   try { await rpc.invoke('addTempLayerGeoJSON', [name, fc, style]); } catch(e) {
-    // Fallback
+    // Fallback: tenta updateTempLayerGeoJSON
     try { await rpc.invoke('updateTempLayerGeoJSON', [name, fc]); } catch {}
   }
 }
@@ -249,32 +249,39 @@ async function compute() {
 
     // Propriedades com altura
     shape.properties = {
-      band: band.label,
-      distance: band.dist,
+      color: band.color,
+      _baseHeight: baseElev,
+      _height: 0.5,
+      _opacity: band.opacity,
     };
 
     const fc = { type: 'FeatureCollection', features: [shape] };
 
-    // TESTE: fill-extrusion com altura hardcoded=50m + slider
-    const h = S.observerHeight || 50; // DEFAULT 50m PARA TESTE
+    // Renderizar como fill-extrusion (3D) na altura configurada
     await renderLayer(`${LO}_f${bi}`, fc, {
       type: 'fill-extrusion',
       paint: {
         'fill-extrusion-color': band.color,
         'fill-extrusion-opacity': band.opacity,
-        'fill-extrusion-base': h,
-        'fill-extrusion-height': h + 1,
+        'fill-extrusion-base': baseElev,
+        'fill-extrusion-height': baseElev + 0.5,
+        // Força a extrusão a usar a ancoragem geométrica e de translação correta do mapa
+        'fill-extrusion-translate-anchor': 'map'
       }
     });
-    // Contorno 2D no chão
+    // Contorno no chão (2D) para referência visual
     await renderLayer(`${LO}_l${bi}`, fc, {
       type: 'line',
-      paint: { 'line-color': band.color, 'line-width': 1.5, 'line-opacity': Math.min(band.opacity + 0.2, 1) }
+      paint: { 'line-color': band.color, 'line-width': 1.2, 'line-opacity': Math.min(band.opacity + 0.2, 1) }
     });
   }
 
   // Ponto observador
-  const obsFeat = turf.point(obs);
+  const obsFeat = turf.point(obs, {
+    color: '#ffffff',
+    _baseHeight: baseElev,
+    _height: 2,
+  });
   await renderLayer(`${LO}_obs`, { type: 'FeatureCollection', features: [obsFeat] }, {
     type: 'circle',
     paint: { 'circle-color': '#fff', 'circle-radius': 6, 'circle-stroke-color': '#000', 'circle-stroke-width': 2 }
@@ -348,15 +355,14 @@ async function fromSel() {
     S.observer = c;
     S.observerLabel = 'Edifício selecionado';
     S.observerFeatId = f.properties?.id || null;
-    // Ler altura do elemento selecionado
+    // Ler altura do elemento selecionado (tenta várias fontes)
     const props = f.properties || {};
-    const bh = Number(props._baseHeight) || 0;
-    const ht = Number(props._height) || Number(props.height) || 0;
-    const be = Number(props._baseElevation) || 0;
-    const coordZ = Number(f.geometry?.coordinates?.[2]) || 0;
-    // Para ponto de observação: usa _baseHeight (onde o ponto está posicionado)
-    S.observerHeight = bh || (be + ht) || coordZ || 0;
-    console.log('[Isovist] Altura:', JSON.stringify({ _baseHeight: bh, _height: ht, _baseElevation: be, coordZ, result: S.observerHeight }));
+    const bh = props._baseHeight || 0;
+    const ht = props._height || props.height || 0;
+    const coordZ = f.geometry?.coordinates?.[2] || 0;
+    // Usa o topo do edifício (base + altura), ou coordenada Z para pontos
+    S.observerHeight = (bh + ht) || coordZ || 0;
+    console.log('[Isovist] Altura do elemento:', { _baseHeight: bh, _height: ht, coordZ, total: S.observerHeight, props });
     const slH = document.getElementById('sl-h');
     if (slH) { slH.value = S.observerHeight; document.getElementById('lbl-h').textContent = Math.round(S.observerHeight) + 'm'; }
     renderObs(); await runCompute();
@@ -402,7 +408,7 @@ document.getElementById('root').innerHTML = `
     <div class="divider"><span>Faixas de distância</span></div>
     <div id="bands-wrap"></div>
   </div>
-  <footer class="ftr"><p>100% Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v19-test</strong></p></footer>
+  <footer class="ftr"><p>100% Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v17</strong></p></footer>
 </div>`;
 
 // ── Wire ─────────────────────────────────────────────────────────────────────
