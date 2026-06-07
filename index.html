@@ -142,9 +142,25 @@ function castRaysTurf(obsCoord, radiusM, coneAngle, coneDir, obstacles, observer
   const obsP     = turf.point(obsCoord);
 
   // Filtrar: só obstáculos mais altos que o observador bloqueiam a visão
-  const tallEnough = obstacles.filter(f => {
+ const tallEnough = obstacles.filter(f => {
     const p = f.properties || {};
-    const buildingTop = (p._baseHeight || 0) + (p._height || p.height || 0);
+    
+    // 1. Captura a elevação base da implantação (funciona para ambos)
+    const baseHeight = p._baseHeight || p.baseHeight || 0; 
+    
+    // 2. Lógica avançada para extrair a altura real do edifício (Metros vs Pisos)
+    let height = 0;
+    if (p._height !== undefined || p.height !== undefined) {
+      height = p._height ?? p.height;
+    } else if (p.levels !== undefined && p.floorToFloor !== undefined) {
+      // Se for um edifício baseado em pisos, calcula: pavimentos * altura do piso
+      height = p.levels * p.floorToFloor;
+    } else if (p._levels !== undefined && p._floorToFloor !== undefined) {
+      height = p._levels * p._floorToFloor;
+    }
+    
+    const buildingTop = baseHeight + height;
+
     // Se o edifício não tem altura definida, assume que obstrui (segurança)
     if (buildingTop === 0) return true;
     return buildingTop > observerHeight;
@@ -265,6 +281,8 @@ async function compute() {
         'fill-extrusion-opacity': band.opacity,
         'fill-extrusion-base': baseElev,
         'fill-extrusion-height': baseElev + 0.5,
+        // Força a extrusão a usar a ancoragem geométrica e de translação correta do mapa
+        'fill-extrusion-translate-anchor': 'map'
       }
     });
     // Contorno no chão (2D) para referência visual
