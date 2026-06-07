@@ -331,13 +331,21 @@ async function compute() {
   setStatus('compute', `Renderizando ${wedgeFeatures.length} fatias...`);
   const fc = { type: 'FeatureCollection', features: wedgeFeatures };
 
+  const h = S.observerHeight;
   await renderLayer(`${LO}_rose`, fc, {
-    type: 'fill',
-    paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.65 }
+    type: 'fill-extrusion',
+    paint: {
+      'fill-extrusion-color': ['get', 'color'],
+      'fill-extrusion-opacity': 0.65,
+      'fill-extrusion-base': h,
+      'fill-extrusion-height': h + 0.5,
+      'fill-extrusion-translate-anchor': 'map'
+    }
   });
+  // Contorno 2D no chão para referência
   await renderLayer(`${LO}_edge`, fc, {
     type: 'line',
-    paint: { 'line-color': ['get', 'color'], 'line-width': 0.3, 'line-opacity': 0.4 }
+    paint: { 'line-color': ['get', 'color'], 'line-width': 0.5, 'line-opacity': 0.4 }
   });
 
   // Ponto observador
@@ -470,7 +478,7 @@ document.getElementById('root').innerHTML = `
       <div class="legend-labels"><span>Bloqueado (perto)</span><span>Livre (longe)</span></div>
     </div>
   </div>
-  <footer class="ftr"><p>Estilo Ladybug · Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v21</strong></p></footer>
+  <footer class="ftr"><p>Estilo Ladybug · Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v22</strong></p></footer>
 </div>`;
 
 // ── Wire ─────────────────────────────────────────────────────────────────────
