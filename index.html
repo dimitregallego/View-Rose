@@ -78,6 +78,10 @@
     .legend{background:#141921;border:1px solid #1e2433;border-radius:6px;padding:8px 10px}
     .legend-bar{height:10px;border-radius:3px;background:linear-gradient(90deg,#d73027,#fc8d59,#fee08b,#d9ef8b,#66bd63,#1a9850);margin-bottom:4px}
     .legend-labels{display:flex;justify-content:space-between;font-size:9px;color:#4a5568}
+    .palette-row{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+    .palette-row select{flex:1;padding:5px 8px;background:#0f1117;border:1px solid #1e2433;border-radius:5px;color:#c0ccd8;font-size:11px;font-family:inherit;cursor:pointer;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%234a5568' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;padding-right:24px}
+    .palette-row select:focus{outline:none;border-color:#00ACCD60}
+    .palette-row select option{background:#141921}
   </style>
 </head>
 <body>
@@ -138,26 +142,56 @@ function flattenToPolygons(features) {
 }
 
 
-// ─── Gradiente de cor estilo Ladybug (vermelho→amarelo→verde) ─────────────────
+// ─── Paletas de cores (estilo Ladybug) ────────────────────────────────────────
+const PALETTES = {
+  'ladybug': {
+    name: 'Ladybug (Vermelho → Verde)',
+    stops: [[215,48,39],[252,141,89],[254,224,139],[217,239,139],[102,189,99],[26,152,80]],
+  },
+  'original': {
+    name: 'Original (Azul → Vermelho)',
+    stops: [[5,48,97],[33,102,172],[67,147,195],[146,197,222],[239,138,98],[178,24,43]],
+  },
+  'ecotect': {
+    name: 'Ecotect (Azul → Verde → Vermelho)',
+    stops: [[0,0,255],[0,128,255],[0,255,128],[128,255,0],[255,128,0],[255,0,0]],
+  },
+  'viridis': {
+    name: 'Viridis (Roxo → Amarelo)',
+    stops: [[68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37],[253,231,37]],
+  },
+  'thermal': {
+    name: 'Térmico (Preto → Vermelho → Branco)',
+    stops: [[10,10,30],[80,10,80],[180,30,30],[230,100,20],[250,200,50],[255,255,220]],
+  },
+  'grayscale': {
+    name: 'Escala de cinza',
+    stops: [[40,40,40],[80,80,80],[120,120,120],[170,170,170],[210,210,210],[240,240,240]],
+  },
+};
+
+let activePalette = 'ladybug';
+
 function distanceToColor(ratio) {
-  const stops = [
-    [0.0, [215, 48, 39]],  // vermelho = bloqueado
-    [0.2, [252, 141, 89]],
-    [0.4, [254, 224, 139]], // amarelo
-    [0.6, [217, 239, 139]],
-    [0.8, [102, 189, 99]],
-    [1.0, [26, 152, 80]],  // verde = livre
-  ];
+  const pal = PALETTES[activePalette].stops;
+  const n = pal.length - 1;
   const t = Math.max(0, Math.min(1, ratio));
-  let i = 0;
-  for (; i < stops.length - 1; i++) { if (t <= stops[i + 1][0]) break; }
-  const [t0, c0] = stops[i];
-  const [t1, c1] = stops[Math.min(i + 1, stops.length - 1)];
-  const f = t1 === t0 ? 0 : (t - t0) / (t1 - t0);
+  const idx = t * n;
+  const i = Math.min(Math.floor(idx), n - 1);
+  const f = idx - i;
+  const c0 = pal[i], c1 = pal[i + 1];
   const r = Math.round(c0[0] + (c1[0] - c0[0]) * f);
   const g = Math.round(c0[1] + (c1[1] - c0[1]) * f);
   const b = Math.round(c0[2] + (c1[2] - c0[2]) * f);
   return '#' + [r,g,b].map(x => x.toString(16).padStart(2,'0')).join('');
+}
+
+function paletteToGradientCSS(key) {
+  const pal = PALETTES[key].stops;
+  return 'linear-gradient(90deg,' + pal.map((c,i) => {
+    const pct = Math.round(i / (pal.length - 1) * 100);
+    return 'rgb(' + c.join(',') + ') ' + pct + '%';
+  }).join(',') + ')';
 }
 // ─── Raycasting Turf.js puro ──────────────────────────────────────────────────
 function castRaysTurf(obsCoord, radiusM, coneAngle, coneDir, obstacles, observerHeight) {
@@ -474,11 +508,14 @@ document.getElementById('root').innerHTML = `
     <div class="sl-grp" id="grp-dir" style="display:none"><div class="sl-row"><span class="sl-lbl">Direção do cone</span><span class="sl-val" id="lbl-d">0°</span></div><input type="range" id="sl-d" min="0" max="355" step="5" value="0"/><div class="sl-ticks"><span>E</span><span>N/S</span><span>W</span></div></div>
     <div class="divider"><span>Legenda</span></div>
     <div class="legend">
-      <div class="legend-bar"></div>
+      <div class="palette-row">
+        <select id="palette-select"></select>
+      </div>
+      <div class="legend-bar" id="legend-bar"></div>
       <div class="legend-labels"><span>Bloqueado (perto)</span><span>Livre (longe)</span></div>
     </div>
   </div>
-  <footer class="ftr"><p>Estilo Ladybug · Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v22</strong></p></footer>
+  <footer class="ftr"><p>Estilo Ladybug · Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v23</strong></p></footer>
 </div>`;
 
 // ── Wire ─────────────────────────────────────────────────────────────────────
@@ -492,6 +529,21 @@ document.getElementById('sl-c').addEventListener('input', e => { S.cone = +e.tar
 document.getElementById('sl-d').addEventListener('input', e => { S.coneDir = +e.target.value; document.getElementById('lbl-d').textContent = S.coneDir + '°'; scheduleRecompute(); });
 
 // Legenda renderizada diretamente no HTML (sem cards dinâmicos)
+
+// Paleta de cores
+const palSel = document.getElementById('palette-select');
+Object.entries(PALETTES).forEach(([key, val]) => {
+  const opt = document.createElement('option');
+  opt.value = key; opt.textContent = val.name;
+  if (key === activePalette) opt.selected = true;
+  palSel.appendChild(opt);
+});
+document.getElementById('legend-bar').style.background = paletteToGradientCSS(activePalette);
+palSel.addEventListener('change', e => {
+  activePalette = e.target.value;
+  document.getElementById('legend-bar').style.background = paletteToGradientCSS(activePalette);
+  scheduleRecompute();
+});
 
 giraffeState.addListener(['mapSelectCoord'], async () => {
   if (!isListening) return; const c = giraffeState.get('mapSelectCoord'); if (!c) return;
