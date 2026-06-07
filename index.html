@@ -270,14 +270,17 @@ async function computeIsovist(obs, radius, cone, coneDir, bands, layerName) {
   let buildFeats = [];
   if (layerName) {
     try {
-      const fc = await rpc.invoke('getLayerContents', [layerName]);
+      // Passa os bounds do mapa para limitar o volume de dados retornado
+      const bounds = await rpc.invoke('getMapBounds', []);
+      const fc = await rpc.invoke('getLayerContents', [layerName, bounds]);
       buildFeats = (fc?.features || []).filter(f =>
         f.geometry?.type === 'Polygon' || f.geometry?.type === 'MultiPolygon'
       );
+      console.log(`[Isovist] ${layerName}: ${buildFeats.length} polígonos encontrados`);
     } catch(e) { console.warn('[Isovist] getLayerContents:', e); }
   }
 
-  setStatus('compute', `${buildFeats.length} edifícios. Projetando...`);
+  setStatus('compute', `${buildFeats.length} edifícios encontrados. Projetando...`);
 
   // Batch: coleta todos os coords para uma única chamada toProjected
   const allGeo = [], meta = [];
@@ -291,7 +294,10 @@ async function computeIsovist(obs, radius, cone, coneDir, bands, layerName) {
     meta.push({ rings, total });
   }
 
-  const proj    = await rpc.invoke('toProjected', [obs, allGeo]);
+  // toProjected requer ao menos 1 coordenada — se não houver edifícios,
+  // passa o próprio ponto observador como placeholder (campo aberto)
+  const coordsToProject = allGeo.length > 0 ? allGeo : [obs];
+  const proj    = await rpc.invoke('toProjected', [obs, coordsToProject]);
   const origin  = proj.origin;
   const projPts = proj.points;
   const px = p => Array.isArray(p) ? p[0] : p.x;
@@ -524,7 +530,7 @@ function buildUI() {
 
     </div>
 
-    <footer class="ftr"><p>Raycasting 2° · Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v6</strong></p></footer>
+    <footer class="ftr"><p>Raycasting 2° · Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v7</strong></p></footer>
   </div>`;
 
   // ── Wire controls ──────────────────────────────────────────────────────────
