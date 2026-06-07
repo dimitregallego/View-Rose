@@ -73,6 +73,11 @@
     .toggle::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#4a5568;transition:transform .2s,background .2s}
     .toggle.on::after{transform:translateX(14px);background:#00ACCD}
     .toggle-label{font-size:11px;color:#8896a8}
+
+    /* Legenda gradiente Ladybug */
+    .legend{background:#141921;border:1px solid #1e2433;border-radius:6px;padding:8px 10px}
+    .legend-bar{height:10px;border-radius:3px;background:linear-gradient(90deg,#d73027,#fc8d59,#fee08b,#d9ef8b,#66bd63,#1a9850);margin-bottom:4px}
+    .legend-labels{display:flex;justify-content:space-between;font-size:9px;color:#4a5568}
   </style>
 </head>
 <body>
@@ -132,6 +137,28 @@ function flattenToPolygons(features) {
   return polys;
 }
 
+
+// ─── Gradiente de cor estilo Ladybug (vermelho→amarelo→verde) ─────────────────
+function distanceToColor(ratio) {
+  const stops = [
+    [0.0, [215, 48, 39]],  // vermelho = bloqueado
+    [0.2, [252, 141, 89]],
+    [0.4, [254, 224, 139]], // amarelo
+    [0.6, [217, 239, 139]],
+    [0.8, [102, 189, 99]],
+    [1.0, [26, 152, 80]],  // verde = livre
+  ];
+  const t = Math.max(0, Math.min(1, ratio));
+  let i = 0;
+  for (; i < stops.length - 1; i++) { if (t <= stops[i + 1][0]) break; }
+  const [t0, c0] = stops[i];
+  const [t1, c1] = stops[Math.min(i + 1, stops.length - 1)];
+  const f = t1 === t0 ? 0 : (t - t0) / (t1 - t0);
+  const r = Math.round(c0[0] + (c1[0] - c0[0]) * f);
+  const g = Math.round(c0[1] + (c1[1] - c0[1]) * f);
+  const b = Math.round(c0[2] + (c1[2] - c0[2]) * f);
+  return '#' + [r,g,b].map(x => x.toString(16).padStart(2,'0')).join('');
+}
 // ─── Raycasting Turf.js puro ──────────────────────────────────────────────────
 function castRaysTurf(obsCoord, radiusM, coneAngle, coneDir, obstacles, observerHeight) {
   const is360    = coneAngle >= 359.9;
@@ -218,97 +245,113 @@ async function renderLayer(name, fc, style) {
   }
 }
 
-// ─── Cálculo + renderização ───────────────────────────────────────────────────
+// ─── Cálculo: wedges coloridos por distância (estilo Ladybug) ─────────────────
 async function compute() {
   const obs = S.observer;
   if (!obs) return;
 
-  // 1. Polígono de visibilidade
-  let visPoly;
+  const is360    = S.cone >= 359.9;
+  const half     = S.cone / 2;
+  const start    = is360 ? 0 : S.coneDir - half;
+  const end      = is360 ? 360 : S.coneDir + half;
+  const radiusKm = S.radius / 1000;
+  const obsP     = turf.point(obs);
+  const obsH     = S.observerHeight;
+
+  // Coletar e filtrar obstáculos (se toggle ON)
+  let polys = [];
   if (S.useObs) {
     setStatus('compute', 'Coletando obstáculos...');
     const obstacles = getObstacles(S.observerFeatId);
     S.obstCount = obstacles.length;
-    if (obstacles.length > 0) {
-      setStatus('compute', `Raycasting contra ${obstacles.length} obstáculos...`);
-      visPoly = castRaysTurf(obs, S.radius, S.cone, S.coneDir, obstacles, S.observerHeight);
-    } else {
-      visPoly = makeOpenField(obs, S.radius, S.cone, S.coneDir);
-    }
-  } else {
-    S.obstCount = 0;
-    visPoly = makeOpenField(obs, S.radius, S.cone, S.coneDir);
-  }
-
-  // 2. Fatiar + renderizar
-  setStatus('compute', 'Renderizando faixas...');
-  const sorted = [...S.bands].sort((a, b) => a.dist - b.dist);
-  sorted[sorted.length - 1].dist = S.radius;
-  const obsP = turf.point(obs);
-
-  // Altura base: pega do edifício selecionado
-  const baseElev = S.observerHeight;
-
-  for (let bi = 0; bi < sorted.length; bi++) {
-    const band = sorted[bi];
-    const circle = turf.buffer(obsP, band.dist / 1000, { units: 'kilometers', steps: 64 });
-
-    // Turf v6: dois argumentos
-    let shape = null;
-    try { shape = turf.intersect(visPoly, circle); } catch {}
-    if (!shape) continue;
-
-    if (bi > 0) {
-      const inner = turf.buffer(obsP, sorted[bi - 1].dist / 1000, { units: 'kilometers', steps: 64 });
-      try { const r = turf.difference(shape, inner); if (r) shape = r; } catch {}
-    }
-
-    // Propriedades com altura
-    shape.properties = {
-      color: band.color,
-      _baseHeight: baseElev,
-      _height: 0.5,
-      _opacity: band.opacity,
-    };
-
-    const fc = { type: 'FeatureCollection', features: [shape] };
-
-    // Renderizar como fill-extrusion (3D) na altura configurada
-    await renderLayer(`${LO}_f${bi}`, fc, {
-      type: 'fill-extrusion',
-      paint: {
-        'fill-extrusion-color': band.color,
-        'fill-extrusion-opacity': band.opacity,
-        'fill-extrusion-base': baseElev,
-        'fill-extrusion-height': baseElev + 0.5,
-        // Força a extrusão a usar a ancoragem geométrica e de translação correta do mapa
-        'fill-extrusion-translate-anchor': 'map'
+    // Usa a mesma lógica de altura do castRaysTurf (levels * floorToFloor)
+    const tall = obstacles.filter(f => {
+      const p = f.properties || {};
+      const baseHeight = p._baseHeight || p.baseHeight || 0;
+      let height = 0;
+      if (p._height !== undefined || p.height !== undefined) {
+        height = p._height ?? p.height;
+      } else if (p.levels !== undefined && p.floorToFloor !== undefined) {
+        height = p.levels * p.floorToFloor;
+      } else if (p._levels !== undefined && p._floorToFloor !== undefined) {
+        height = p._levels * p._floorToFloor;
       }
+      const buildingTop = baseHeight + height;
+      if (buildingTop === 0) return true;
+      return buildingTop > obsH;
     });
-    // Contorno no chão (2D) para referência visual
-    await renderLayer(`${LO}_l${bi}`, fc, {
-      type: 'line',
-      paint: { 'line-color': band.color, 'line-width': 1.2, 'line-opacity': Math.min(band.opacity + 0.2, 1) }
-    });
+    polys = flattenToPolygons(tall);
+    setStatus('compute', `Raycasting contra ${polys.length} obstáculos...`);
   }
+
+  // Disparar raios e criar wedges coloridos
+  const wedgeFeatures = [];
+  let prevTip = null;
+  let prevDist = 0;
+
+  for (let bearing = start; bearing <= end + 0.01; bearing += RAY_STEP) {
+    const b = Math.min(bearing, end);
+    const farCoord = turf.destination(obs, radiusKm, b, { units: 'kilometers' }).geometry.coordinates;
+
+    // Raycasting contra obstáculos
+    let tipCoord = farCoord;
+    let tipDist  = radiusKm;
+
+    if (polys.length > 0) {
+      const ray = turf.lineString([obs, farCoord]);
+      for (const poly of polys) {
+        try {
+          const ring = turf.polygonToLine(poly);
+          const hits = turf.lineIntersect(ray, ring);
+          for (const hit of hits.features) {
+            const d = turf.distance(obsP, hit, { units: 'kilometers' });
+            if (d > 0.001 && d < tipDist) { tipDist = d; tipCoord = hit.geometry.coordinates; }
+          }
+        } catch {}
+      }
+    }
+
+    // Criar wedge entre raio anterior e atual
+    if (prevTip !== null) {
+      const avgDist = (prevDist + tipDist) / 2;
+      const ratio   = avgDist / radiusKm; // 0=bloqueado perto, 1=livre
+      const color   = distanceToColor(ratio);
+      try {
+        const wedge = turf.polygon([[obs, prevTip, tipCoord, obs]]);
+        wedge.properties = { color, dist_ratio: ratio, dist_m: Math.round(avgDist * 1000) };
+        wedgeFeatures.push(wedge);
+      } catch {}
+    }
+
+    prevTip  = tipCoord;
+    prevDist = tipDist;
+  }
+
+  // Renderizar wedges com data-driven color
+  setStatus('compute', `Renderizando ${wedgeFeatures.length} fatias...`);
+  const fc = { type: 'FeatureCollection', features: wedgeFeatures };
+
+  await renderLayer(`${LO}_rose`, fc, {
+    type: 'fill',
+    paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.65 }
+  });
+  await renderLayer(`${LO}_edge`, fc, {
+    type: 'line',
+    paint: { 'line-color': ['get', 'color'], 'line-width': 0.3, 'line-opacity': 0.4 }
+  });
 
   // Ponto observador
-  const obsFeat = turf.point(obs, {
-    color: '#ffffff',
-    _baseHeight: baseElev,
-    _height: 2,
-  });
-  await renderLayer(`${LO}_obs`, { type: 'FeatureCollection', features: [obsFeat] }, {
+  await renderLayer(`${LO}_obs`, { type:'FeatureCollection', features:[turf.point(obs)] }, {
     type: 'circle',
-    paint: { 'circle-color': '#fff', 'circle-radius': 6, 'circle-stroke-color': '#000', 'circle-stroke-width': 2 }
+    paint: { 'circle-color': '#fff', 'circle-radius': 5, 'circle-stroke-color': '#000', 'circle-stroke-width': 2 }
   });
+
+  return wedgeFeatures.length;
 }
 
 async function clearLayers() {
-  for (let i = 0; i < S.bands.length; i++) {
-    try { await rpc.invoke('removeTempLayer', [`${LO}_f${i}`]); } catch {}
-    try { await rpc.invoke('removeTempLayer', [`${LO}_l${i}`]); } catch {}
-  }
+  try { await rpc.invoke('removeTempLayer', [`${LO}_rose`]); } catch {}
+  try { await rpc.invoke('removeTempLayer', [`${LO}_edge`]); } catch {}
   try { await rpc.invoke('removeTempLayer', [`${LO}_obs`]); } catch {}
 }
 
@@ -350,10 +393,10 @@ async function runCompute() {
   if (!S.observer) return;
   const t0 = performance.now();
   try {
-    await compute();
+    const n = await compute();
     S.computeMs = Math.round(performance.now() - t0);
     const hTxt = S.observerHeight > 0 ? ` · h=${Math.round(S.observerHeight)}m` : '';
-    setStatus('done', S.useObs ? `${S.obstCount} obstáculos${hTxt} · ${S.computeMs}ms` : `Campo aberto${hTxt} · ${S.computeMs}ms`);
+    setStatus('done', `${n || 0} fatias${hTxt} · ${S.computeMs}ms`);
   } catch (e) { console.error(e); setStatus('error', String(e)); }
   renderBtns();
 }
@@ -421,10 +464,13 @@ document.getElementById('root').innerHTML = `
     <div class="sl-grp"><div class="sl-row"><span class="sl-lbl">Raio máximo</span><span class="sl-val" id="lbl-r">300m</span></div><input type="range" id="sl-r" min="50" max="1000" step="25" value="300"/><div class="sl-ticks"><span>50m</span><span>500m</span><span>1km</span></div></div>
     <div class="sl-grp"><div class="sl-row"><span class="sl-lbl">Abertura do cone</span><span class="sl-val" id="lbl-c">360° (View Rose)</span></div><input type="range" id="sl-c" min="10" max="360" step="5" value="360"/><div class="sl-ticks"><span>10°</span><span>180°</span><span>360°</span></div></div>
     <div class="sl-grp" id="grp-dir" style="display:none"><div class="sl-row"><span class="sl-lbl">Direção do cone</span><span class="sl-val" id="lbl-d">0°</span></div><input type="range" id="sl-d" min="0" max="355" step="5" value="0"/><div class="sl-ticks"><span>E</span><span>N/S</span><span>W</span></div></div>
-    <div class="divider"><span>Faixas de distância</span></div>
-    <div id="bands-wrap"></div>
+    <div class="divider"><span>Legenda</span></div>
+    <div class="legend">
+      <div class="legend-bar"></div>
+      <div class="legend-labels"><span>Bloqueado (perto)</span><span>Livre (longe)</span></div>
+    </div>
   </div>
-  <footer class="ftr"><p>100% Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v17</strong></p></footer>
+  <footer class="ftr"><p>Estilo Ladybug · Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v21</strong></p></footer>
 </div>`;
 
 // ── Wire ─────────────────────────────────────────────────────────────────────
@@ -433,20 +479,11 @@ document.getElementById('btn-point').addEventListener('click', fromMap);
 document.getElementById('btn-clear').addEventListener('click', clearAll);
 document.getElementById('toggle-obs').addEventListener('click', function () { S.useObs = !S.useObs; this.className = 'toggle' + (S.useObs ? ' on' : ''); scheduleRecompute(); });
 document.getElementById('sl-h').addEventListener('input', e => { S.observerHeight = +e.target.value; document.getElementById('lbl-h').textContent = S.observerHeight + 'm'; scheduleRecompute(); });
-document.getElementById('sl-r').addEventListener('input', e => { S.radius = +e.target.value; document.getElementById('lbl-r').textContent = S.radius + 'm'; const ld = document.getElementById(`bd-${S.bands.length - 1}`); if (ld) ld.value = S.radius; scheduleRecompute(); });
+document.getElementById('sl-r').addEventListener('input', e => { S.radius = +e.target.value; document.getElementById('lbl-r').textContent = S.radius + 'm'; scheduleRecompute(); });
 document.getElementById('sl-c').addEventListener('input', e => { S.cone = +e.target.value; document.getElementById('lbl-c').textContent = S.cone >= 359.9 ? '360° (View Rose)' : S.cone + '°'; document.getElementById('grp-dir').style.display = S.cone >= 359.9 ? 'none' : ''; scheduleRecompute(); });
 document.getElementById('sl-d').addEventListener('input', e => { S.coneDir = +e.target.value; document.getElementById('lbl-d').textContent = S.coneDir + '°'; scheduleRecompute(); });
 
-const wrap = document.getElementById('bands-wrap');
-S.bands.forEach((band, i) => {
-  const isLast = i === S.bands.length - 1;
-  const card = document.createElement('div'); card.className = 'band-card';
-  card.innerHTML = `<div class="band-hdr"><div class="swatch" id="sw-${i}" style="background:${band.color}"></div><span class="band-name">${band.label}</span><input type="color" id="bc-${i}" value="${band.color}"/></div><div class="brow"><span class="bmeta">Limite</span><input type="number" id="bd-${i}" value="${isLast ? S.radius : band.dist}" min="10" max="1000" step="10" ${isLast ? 'disabled' : ''}/><span class="bmeta">m · Op.</span><input type="range" id="bo-${i}" class="thin" min=".05" max=".85" step=".05" value="${band.opacity}" style="flex:1"/><span class="bmeta" id="bol-${i}">${Math.round(band.opacity * 100)}%</span></div>`;
-  wrap.appendChild(card);
-  document.getElementById(`bc-${i}`).addEventListener('input', e => { S.bands[i].color = e.target.value; document.getElementById(`sw-${i}`).style.background = e.target.value; scheduleRecompute(); });
-  if (!isLast) document.getElementById(`bd-${i}`).addEventListener('change', e => { S.bands[i].dist = +e.target.value; scheduleRecompute(); });
-  document.getElementById(`bo-${i}`).addEventListener('input', e => { S.bands[i].opacity = +e.target.value; document.getElementById(`bol-${i}`).textContent = Math.round(+e.target.value * 100) + '%'; scheduleRecompute(); });
-});
+// Legenda renderizada diretamente no HTML (sem cards dinâmicos)
 
 giraffeState.addListener(['mapSelectCoord'], async () => {
   if (!isListening) return; const c = giraffeState.get('mapSelectCoord'); if (!c) return;
