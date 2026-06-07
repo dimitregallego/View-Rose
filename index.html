@@ -88,7 +88,7 @@ const RAY_STEP  = 2;
 const S = {
   observer: null, observerLabel: '', observerFeatId: null,
   radius: 300, cone: 360, coneDir: 0,
-  useObstructions: true,
+  useObstructions: false,
   bands: [
     { label: 'Próximo',  dist: 100, color: '#00ACCD', opacity: 0.55 },
     { label: 'Médio',    dist: 250, color: '#2DD4BF', opacity: 0.40 },
@@ -182,7 +182,10 @@ async function computeIsovist() {
         meta.push({ rings, total });
       }
 
-      // Projetar
+      // Projetar — skip se não houver coordenadas válidas
+      if (allGeo.length === 0) {
+        visPoly = makeOpenFieldPoly(obs, is360, half);
+      } else {
       const proj    = await rpc.invoke('toProjected', [obs, allGeo]);
       const origin  = proj.origin;
       const projPts = proj.points;
@@ -221,6 +224,7 @@ async function computeIsovist() {
         ? [...geoRay, geoRay[0]]
         : [obs, ...geoRay, obs];
       visPoly = turf.polygon([[...polyCoords, polyCoords[0]]]);
+      } // fecha if allGeo.length > 0
 
     } else {
       // 0 obstáculos — campo aberto
@@ -397,7 +401,7 @@ document.getElementById('root').innerHTML = `
 
     <div class="divider"><span>Obstruções</span></div>
     <div class="toggle-row">
-      <button class="toggle on" id="toggle-obs"></button>
+      <button class="toggle" id="toggle-obs"></button>
       <span class="toggle-label">Usar obstruções (edifícios do projeto)</span>
     </div>
     <div class="info-box" id="info-obs">Carregando...</div>
@@ -422,7 +426,7 @@ document.getElementById('root').innerHTML = `
     <div class="divider"><span>Faixas de distância</span></div>
     <div id="bands-wrap"></div>
   </div>
-  <footer class="ftr"><p>Raycasting 2° · Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v11</strong></p></footer>
+  <footer class="ftr"><p>Raycasting 2° · Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v12</strong></p></footer>
 </div>`;
 
 // ── Wire ─────────────────────────────────────────────────────────────────────
