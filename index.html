@@ -35,7 +35,6 @@
     .btn-sel:hover:not(:disabled){background:#2DD4BF28}
     .btn-sel:disabled{opacity:.4;cursor:not-allowed}
     .btn-cancel{border:1px solid #f59e0b;color:#f59e0b;background:#f59e0b10}
-    .btn-cancel:hover{background:#f59e0b22}
     .btn-clear{border:1px solid #2d3748;background:transparent;color:#718096;padding:7px 12px;font-size:11px}
     .btn-clear:hover{background:#1e2433;color:#a0aec0}
     .divider{display:flex;align-items:center;gap:8px;font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;color:#4a5568;margin-top:3px}
@@ -83,162 +82,140 @@ import { giraffeState, rpc } from 'https://esm.sh/@gi-nx/iframe-sdk@latest';
 import * as turf              from 'https://esm.sh/@turf/turf@6.5.0';
 
 // ─── Estado ───────────────────────────────────────────────────────────────────
-const LAYER_OUT = 'isovist_view';
-const RAY_STEP  = 2;
+const LO = 'isovist_vr';
+const RAY_STEP = 2; // graus
 const S = {
   observer: null, observerLabel: '', observerFeatId: null,
   radius: 300, cone: 360, coneDir: 0,
-  useObstructions: false,
+  useObs: false, // toggle de obstruções (OFF por padrão)
   bands: [
     { label: 'Próximo',  dist: 100, color: '#00ACCD', opacity: 0.55 },
     { label: 'Médio',    dist: 250, color: '#2DD4BF', opacity: 0.40 },
     { label: 'Distante', dist: 500, color: '#64748B', opacity: 0.25 },
   ],
-  status: 'idle', statusMsg: '', computeMs: null, obstacleCount: 0,
+  status: 'idle', computeMs: null, obstCount: 0,
 };
 let isListening = false, debounce = null;
 
-// ─── Obter obstáculos do rawSections (todos os layers) ────────────────────────
-function getAllObstacles(excludeId) {
+// ─── Obter obstáculos de rawSections ──────────────────────────────────────────
+function getObstacles(excludeId) {
   let raw = giraffeState.get('rawSections');
-  // rawSections pode ser array, objeto, ou undefined
   if (!raw) return [];
   if (!Array.isArray(raw)) {
-    // Se for um objeto (ex: { features: [...] }), tenta extrair
     if (raw.features && Array.isArray(raw.features)) raw = raw.features;
-    else if (typeof raw === 'object') raw = Object.values(raw);
+    else if (typeof raw === 'object') { try { raw = Object.values(raw); } catch { return []; } }
     else return [];
   }
   return raw.filter(f => {
-    if (!f || !f.geometry) return false;
+    if (!f?.geometry) return false;
     const t = f.geometry.type;
     if (t !== 'Polygon' && t !== 'MultiPolygon') return false;
-    const lid = f.properties?.layerId || '';
-    if (lid.startsWith(LAYER_OUT)) return false;
+    if ((f.properties?.layerId || '').startsWith(LO)) return false;
     if (excludeId && f.properties?.id === excludeId) return false;
     return true;
   });
 }
 
-// ─── Raycasting ───────────────────────────────────────────────────────────────
-function castRay(angleDeg, maxD, segs) {
-  const rad = angleDeg * Math.PI / 180;
-  const dx = Math.cos(rad), dy = Math.sin(rad);
-  let minT = 1;
-  for (const [ax, ay, bx, by] of segs) {
-    const sx = bx-ax, sy = by-ay;
-    const denom = dx*maxD*sy - dy*maxD*sx;
-    if (Math.abs(denom) < 1e-10) continue;
-    const t = (ax*sy - ay*sx) / denom;
-    const u = (ax*dy*maxD - ay*dx*maxD) / denom;
-    if (t >= 0 && t < minT && u >= 0 && u <= 1) minT = t;
-  }
-  return [dx*maxD*minT, dy*maxD*minT];
-}
+// ─── Raycasting 100% Turf.js (coordenadas geográficas, sem toProjected) ──────
+// Para cada raio: turf.destination gera o endpoint, turf.lineString cria o raio,
+// turf.lineIntersect testa contra cada polígono, turf.distance mede a distância.
+function castRaysWithTurf(obsCoord, radiusM, coneAngle, coneDir, obstacles) {
+  const is360   = coneAngle >= 359.9;
+  const half    = coneAngle / 2;
+  const start   = is360 ? 0 : coneDir - half;
+  const end     = is360 ? 360 : coneDir + half;
+  const radiusKm = radiusM / 1000;
+  const obsPoint = turf.point(obsCoord);
+  const rayTips  = [];
 
-function extractSegs(projPolys, searchR) {
-  const segs = [], r2 = searchR*searchR;
-  for (const rings of projPolys) {
-    for (const ring of rings) {
-      for (let i = 0; i < ring.length-1; i++) {
-        const [ax,ay] = ring[i], [bx,by] = ring[i+1];
-        if (ax*ax+ay*ay > r2*4 && bx*bx+by*by > r2*4) continue;
-        segs.push([ax, ay, bx, by]);
-      }
+  for (let bearing = start; bearing < end; bearing += RAY_STEP) {
+    // Endpoint do raio no raio máximo
+    const farPt = turf.destination(obsCoord, radiusKm, bearing, { units: 'kilometers' });
+    const rayLine = turf.lineString([obsCoord, farPt.geometry.coordinates]);
+
+    let closestDist = radiusKm;
+    let closestPt   = farPt.geometry.coordinates;
+
+    // Testar interseção com cada obstáculo
+    for (const feat of obstacles) {
+      try {
+        const hits = turf.lineIntersect(rayLine, feat);
+        if (hits.features.length > 0) {
+          for (const hit of hits.features) {
+            const d = turf.distance(obsPoint, hit, { units: 'kilometers' });
+            if (d < closestDist) {
+              closestDist = d;
+              closestPt = hit.geometry.coordinates;
+            }
+          }
+        }
+      } catch { /* geometria inválida — ignora */ }
     }
+
+    rayTips.push(closestPt);
   }
-  return segs;
+
+  // Último ângulo
+  const lastFar = turf.destination(obsCoord, radiusKm, end, { units: 'kilometers' });
+  const lastLine = turf.lineString([obsCoord, lastFar.geometry.coordinates]);
+  let lastPt = lastFar.geometry.coordinates;
+  let lastDist = radiusKm;
+  for (const feat of obstacles) {
+    try {
+      const hits = turf.lineIntersect(lastLine, feat);
+      for (const hit of hits.features) {
+        const d = turf.distance(obsPoint, hit, { units: 'kilometers' });
+        if (d < lastDist) { lastDist = d; lastPt = hit.geometry.coordinates; }
+      }
+    } catch {}
+  }
+  rayTips.push(lastPt);
+
+  // Montar polígono
+  if (is360) return turf.polygon([[...rayTips, rayTips[0]]]);
+  return turf.polygon([[obsCoord, ...rayTips, obsCoord]]);
 }
 
-// ─── Cálculo principal ────────────────────────────────────────────────────────
-async function computeIsovist() {
+// ─── Campo aberto (sem obstáculos) ────────────────────────────────────────────
+function makeOpenField(obs, radiusM, coneAngle, coneDir) {
+  const is360 = coneAngle >= 359.9;
+  const half  = coneAngle / 2;
+  const start = is360 ? 0 : coneDir - half;
+  const end   = is360 ? 360 : coneDir + half;
+  const pts   = [];
+  for (let a = start; a < end; a += RAY_STEP) {
+    pts.push(turf.destination(obs, radiusM/1000, a, {units:'kilometers'}).geometry.coordinates);
+  }
+  pts.push(turf.destination(obs, radiusM/1000, end, {units:'kilometers'}).geometry.coordinates);
+  if (is360) return turf.polygon([[...pts, pts[0]]]);
+  return turf.polygon([[obs, ...pts, obs]]);
+}
+
+// ─── Cálculo + renderização ───────────────────────────────────────────────────
+async function compute() {
   const obs = S.observer;
   if (!obs) return;
 
-  const is360 = S.cone >= 359.9;
-  const half  = S.cone / 2;
-
-  // ── 1. Gerar polígono de visibilidade ──────────────────────────────────────
+  // 1. Gerar polígono de visibilidade
   let visPoly;
-
-  if (S.useObstructions) {
-    // COM obstruções: raycasting contra edifícios
+  if (S.useObs) {
     setStatus('compute', 'Coletando obstáculos...');
-    const obstacles = getAllObstacles(S.observerFeatId);
-    S.obstacleCount = obstacles.length;
-
+    const obstacles = getObstacles(S.observerFeatId);
+    S.obstCount = obstacles.length;
     if (obstacles.length > 0) {
-      setStatus('compute', `${obstacles.length} obstáculos. Projetando...`);
-
-      // Coletar coordenadas para toProjected
-      const allGeo = [], meta = [];
-      for (const f of obstacles) {
-        const rings = f.geometry.type === 'Polygon'
-          ? f.geometry.coordinates
-          : f.geometry.coordinates.flat();
-        let total = 0;
-        for (const ring of rings)
-          for (const c of ring) { allGeo.push([c[0], c[1]]); total++; }
-        meta.push({ rings, total });
-      }
-
-      // Projetar — skip se não houver coordenadas válidas
-      if (allGeo.length === 0) {
-        visPoly = makeOpenFieldPoly(obs, is360, half);
-      } else {
-      const proj    = await rpc.invoke('toProjected', [obs, allGeo]);
-      const origin  = proj.origin;
-      const projPts = proj.points;
-      const px = p => Array.isArray(p) ? p[0] : (p?.x ?? 0);
-      const py = p => Array.isArray(p) ? p[1] : (p?.y ?? 0);
-      const ox = px(origin), oy = py(origin);
-
-      // Reconstruir polígonos relativos ao observador
-      const projPolys = [];
-      let idx = 0;
-      for (const { rings } of meta) {
-        const projRings = [];
-        for (const ring of rings) {
-          projRings.push(ring.map(() => {
-            const p = projPts[idx++];
-            return [px(p)-ox, py(p)-oy];
-          }));
-        }
-        projPolys.push(projRings);
-      }
-
-      // Raycasting
-      const segs = extractSegs(projPolys, S.radius * 1.5);
-      const angles = [];
-      for (let a = is360 ? 0 : S.coneDir-half; a < (is360 ? 360 : S.coneDir+half); a += RAY_STEP) angles.push(a);
-      if (!is360) angles.push(S.coneDir+half);
-
-      setStatus('compute', `Disparando ${angles.length} raios...`);
-      const rayPts = angles.map(a => castRay(a, S.radius, segs));
-
-      // Converter de volta para geo
-      const absRay = rayPts.map(([x,y]) => [x+ox, y+oy]);
-      const geoRay = await rpc.invoke('fromProjected', [origin, absRay]);
-
-      const polyCoords = is360
-        ? [...geoRay, geoRay[0]]
-        : [obs, ...geoRay, obs];
-      visPoly = turf.polygon([[...polyCoords, polyCoords[0]]]);
-      } // fecha if allGeo.length > 0
-
+      setStatus('compute', `Raycasting contra ${obstacles.length} obstáculos...`);
+      visPoly = castRaysWithTurf(obs, S.radius, S.cone, S.coneDir, obstacles);
     } else {
-      // 0 obstáculos — campo aberto
-      visPoly = makeOpenFieldPoly(obs, is360, half);
+      visPoly = makeOpenField(obs, S.radius, S.cone, S.coneDir);
     }
   } else {
-    // SEM obstruções — campo aberto
-    S.obstacleCount = 0;
-    visPoly = makeOpenFieldPoly(obs, is360, half);
+    S.obstCount = 0;
+    visPoly = makeOpenField(obs, S.radius, S.cone, S.coneDir);
   }
 
-  // ── 2. Fatiar em bandas ────────────────────────────────────────────────────
+  // 2. Fatiar em bandas concêntricas
   setStatus('compute', 'Fatiando faixas...');
-  const sorted = [...S.bands].sort((a,b) => a.dist-b.dist);
+  const sorted = [...S.bands].sort((a,b) => a.dist - b.dist);
   sorted[sorted.length-1].dist = S.radius;
   const obsP = turf.point(obs);
 
@@ -246,146 +223,111 @@ async function computeIsovist() {
     const band   = sorted[bi];
     const circle = turf.buffer(obsP, band.dist/1000, { units:'kilometers', steps:64 });
 
-    // Intersectar com polígono de visibilidade — TURF V6: dois argumentos
+    // Intersectar com visibilidade — Turf v6: dois argumentos
     let shape = null;
     try { shape = turf.intersect(visPoly, circle); } catch {}
     if (!shape) continue;
 
-    // Subtrair anel interno — TURF V6: dois argumentos
+    // Subtrair anel interno — Turf v6: dois argumentos
     if (bi > 0) {
-      const innerCircle = turf.buffer(obsP, sorted[bi-1].dist/1000, { units:'kilometers', steps:64 });
-      try {
-        const ring = turf.difference(shape, innerCircle);
-        if (ring) shape = ring;
-      } catch {}
+      const inner = turf.buffer(obsP, sorted[bi-1].dist/1000, { units:'kilometers', steps:64 });
+      try { const r = turf.difference(shape, inner); if (r) shape = r; } catch {}
     }
 
+    // Propriedades visuais no GeoJSON
     shape.properties = { fill: band.color, 'fill-opacity': band.opacity, stroke: band.color, 'stroke-width': 1 };
-    const fc = { type:'FeatureCollection', features:[shape] };
-    try { await rpc.invoke('updateTempLayerGeoJSON', [`${LAYER_OUT}_${bi}`, fc]); }
-    catch(e) { console.warn(`Layer ${bi}:`, e); }
+    const fc = { type: 'FeatureCollection', features: [shape] };
+
+    // Renderizar — updateTempLayerGeoJSON (confirmado funcionar na v10)
+    try { await rpc.invoke('updateTempLayerGeoJSON', [`${LO}_${bi}`, fc]); }
+    catch(e) { console.warn(`Render band ${bi}:`, e); }
   }
 
   // Ponto observador
-  const obsFC = { type:'FeatureCollection', features:[turf.point(obs, {color:'#fff'})] };
-  try { await rpc.invoke('updateTempLayerGeoJSON', [`${LAYER_OUT}_obs`, obsFC]); } catch {}
-}
-
-// Campo aberto: gerar círculo/cone com turf.destination
-function makeOpenFieldPoly(obs, is360, half) {
-  const pts = [];
-  const start = is360 ? 0 : S.coneDir - half;
-  const end   = is360 ? 360 : S.coneDir + half;
-  for (let a = start; a < end; a += RAY_STEP) {
-    pts.push(turf.destination(obs, S.radius/1000, a, {units:'kilometers'}).geometry.coordinates);
-  }
-  pts.push(turf.destination(obs, S.radius/1000, end, {units:'kilometers'}).geometry.coordinates);
-  if (is360) return turf.polygon([[...pts, pts[0]]]);
-  return turf.polygon([[obs, ...pts, obs]]);
+  try {
+    await rpc.invoke('updateTempLayerGeoJSON', [`${LO}_obs`, {
+      type: 'FeatureCollection', features: [turf.point(obs, { color: '#ffffff' })]
+    }]);
+  } catch {}
 }
 
 // ─── Clear ────────────────────────────────────────────────────────────────────
 async function clearLayers() {
   for (let i = 0; i < S.bands.length; i++) {
-    try { await rpc.invoke('removeTempLayer', [`${LAYER_OUT}_${i}`]); } catch {}
+    try { await rpc.invoke('removeTempLayer', [`${LO}_${i}`]); } catch {}
   }
-  try { await rpc.invoke('removeTempLayer', [`${LAYER_OUT}_obs`]); } catch {}
+  try { await rpc.invoke('removeTempLayer', [`${LO}_obs`]); } catch {}
 }
 
 // ─── UI ───────────────────────────────────────────────────────────────────────
 function setStatus(s, msg) {
-  S.status = s; S.statusMsg = msg;
+  S.status = s;
   const bar = document.getElementById('sb');
   if (!bar) return;
   bar.className = 'status ' + (s === 'idle' ? 'hidden' : s);
   const ico = document.getElementById('si'), txt = document.getElementById('st');
-  if (s === 'waiting') { ico.className='pulse'; txt.textContent=msg; }
-  else if (s === 'compute') { ico.className='spinner'; txt.textContent=msg; }
-  else if (s === 'done') { ico.className=''; ico.textContent='✓'; txt.textContent=msg; }
-  else if (s === 'error') { ico.className=''; ico.textContent='⚠'; txt.textContent=msg; }
+  if (s === 'waiting')  { ico.className='pulse'; txt.textContent=msg; }
+  if (s === 'compute')  { ico.className='spinner'; txt.textContent=msg; }
+  if (s === 'done')     { ico.className=''; ico.textContent='✓'; txt.textContent=msg; }
+  if (s === 'error')    { ico.className=''; ico.textContent='⚠'; txt.textContent=msg; }
 }
-
 function renderObs() {
   const c = document.getElementById('obs-card');
   if (!c) return;
-  if (S.observer) {
-    c.className = 'obs-card visible';
-    document.getElementById('obs-val').textContent = `${S.observer[1].toFixed(5)}, ${S.observer[0].toFixed(5)}`;
-    document.getElementById('obs-lbl-txt').textContent = S.observerLabel;
-  } else c.className = 'obs-card';
+  if (S.observer) { c.className='obs-card visible'; document.getElementById('obs-val').textContent=`${S.observer[1].toFixed(5)}, ${S.observer[0].toFixed(5)}`; document.getElementById('obs-lbl-txt').textContent=S.observerLabel; }
+  else c.className='obs-card';
 }
-
 function renderBtns() {
-  const bp = document.getElementById('btn-point'), bs = document.getElementById('btn-sel'), bc = document.getElementById('btn-clear');
-  if (S.status === 'waiting') { bp.className='btn btn-cancel'; bp.innerHTML='<span class="pulse"></span> Clique no mapa...'; bp.disabled=false; bs.disabled=true; }
-  else if (S.status === 'compute') { bp.disabled=true; bs.disabled=true; }
+  const bp=document.getElementById('btn-point'), bs=document.getElementById('btn-sel'), bc=document.getElementById('btn-clear');
+  if (S.status==='waiting') { bp.className='btn btn-cancel'; bp.innerHTML='<span class="pulse"></span> Clique no mapa...'; bp.disabled=false; bs.disabled=true; }
+  else if (S.status==='compute') { bp.disabled=true; bs.disabled=true; }
   else { bp.className='btn btn-primary'; bp.innerHTML='◎ Observar de um ponto no mapa'; bp.disabled=false; bs.disabled=false; }
-  bc.style.display = (S.status==='done'||S.status==='error') ? '' : 'none';
+  bc.style.display=(S.status==='done'||S.status==='error')?'':'none';
 }
-
 function renderInfo() {
-  const el = document.getElementById('info-obs');
-  if (!el) return;
-  const obstacles = getAllObstacles(null);
-  const layers = new Set();
-  obstacles.forEach(f => { const l = f.properties?.layerId; if(l) layers.add(l); });
-  el.innerHTML = `Polígonos no projeto: <span class="accent">${obstacles.length}</span> · Layers: <span class="accent">${[...layers].join(', ') || 'nenhum'}</span>`;
+  const el=document.getElementById('info-obs'); if(!el) return;
+  const obs=getObstacles(null);
+  const ls=new Set(); obs.forEach(f=>{const l=f.properties?.layerId; if(l) ls.add(l);});
+  el.innerHTML=`Polígonos: <span class="accent">${obs.length}</span> · Layers: <span class="accent">${[...ls].join(', ')||'nenhum'}</span>`;
 }
-
-function scheduleRecompute() {
-  if (!S.observer) return;
-  clearTimeout(debounce);
-  debounce = setTimeout(runCompute, 300);
-}
+function scheduleRecompute() { if(!S.observer) return; clearTimeout(debounce); debounce=setTimeout(runCompute,300); }
 
 async function runCompute() {
   if (!S.observer) return;
-  const t0 = performance.now();
-  try {
-    await computeIsovist();
-    S.computeMs = Math.round(performance.now()-t0);
-    const msg = S.useObstructions
-      ? `${S.obstacleCount} obstáculos · ${S.computeMs}ms`
-      : `Campo aberto · ${S.computeMs}ms`;
-    setStatus('done', msg);
+  const t0=performance.now();
+  try { await compute(); S.computeMs=Math.round(performance.now()-t0);
+    setStatus('done', S.useObs ? `${S.obstCount} obstáculos · ${S.computeMs}ms` : `Campo aberto · ${S.computeMs}ms`);
   } catch(e) { console.error(e); setStatus('error', String(e)); }
   renderBtns();
 }
 
 // ─── Ações ────────────────────────────────────────────────────────────────────
-async function fromSelectedBuilding() {
-  if (S.status === 'compute') return;
-  setStatus('compute', 'Lendo edifício selecionado...'); renderBtns();
+async function fromSel() {
+  if (S.status==='compute') return;
+  setStatus('compute','Lendo seleção...'); renderBtns();
   try {
-    const result = await rpc.invoke('getSelectedFeatures', []);
-    const feats = Array.isArray(result) ? result : (result?.features || []);
-    if (!feats.length) { setStatus('error', 'Nenhum elemento selecionado no mapa.'); renderBtns(); return; }
-    const f = feats[0];
-    const centroid = turf.centroid(f).geometry.coordinates;
-    S.observer = centroid; S.observerLabel = 'Edifício selecionado'; S.observerFeatId = f.properties?.id || null;
+    const r=await rpc.invoke('getSelectedFeatures',[]); const feats=Array.isArray(r)?r:(r?.features||[]);
+    if(!feats.length){setStatus('error','Nenhum elemento selecionado no mapa.');renderBtns();return;}
+    const f=feats[0]; const c=turf.centroid(f).geometry.coordinates;
+    S.observer=c; S.observerLabel='Edifício selecionado'; S.observerFeatId=f.properties?.id||null;
     renderObs(); await runCompute();
-  } catch(e) { setStatus('error', String(e)); renderBtns(); }
+  } catch(e){setStatus('error',String(e));renderBtns();}
 }
-
-async function fromMapClick() {
-  if (S.status === 'compute') return;
-  if (S.status === 'waiting') { isListening=false; setStatus('idle',''); renderBtns(); return; }
-  isListening = true; S.observerFeatId = null;
-  setStatus('waiting', 'Clique em qualquer ponto do mapa...'); renderBtns();
+async function fromMap() {
+  if(S.status==='compute') return;
+  if(S.status==='waiting'){isListening=false;setStatus('idle','');renderBtns();return;}
+  isListening=true; S.observerFeatId=null;
+  setStatus('waiting','Clique em qualquer ponto do mapa...'); renderBtns();
   try {
-    const pt = await rpc.invoke('drawPoint', []);
-    if (!isListening) return;
-    if (pt) { isListening=false; S.observer = Array.isArray(pt)?pt:[pt.lng??pt[0],pt.lat??pt[1]]; S.observerLabel='Ponto no mapa'; renderObs(); await runCompute(); }
-  } catch { console.warn('drawPoint indisponível'); }
+    const pt=await rpc.invoke('drawPoint',[]);
+    if(!isListening) return;
+    if(pt){isListening=false; S.observer=Array.isArray(pt)?pt:[pt.lng??pt[0],pt.lat??pt[1]]; S.observerLabel='Ponto no mapa'; renderObs(); await runCompute();}
+  } catch{console.warn('drawPoint indisponível');}
 }
-
-async function clearAll() {
-  clearTimeout(debounce); S.observer=null; S.computeMs=null; S.observerFeatId=null;
-  setStatus('idle',''); renderObs(); renderBtns(); await clearLayers();
-}
+async function clearAll(){clearTimeout(debounce);S.observer=null;S.computeMs=null;S.observerFeatId=null;setStatus('idle','');renderObs();renderBtns();await clearLayers();}
 
 // ─── DOM ──────────────────────────────────────────────────────────────────────
-document.getElementById('root').innerHTML = `
+document.getElementById('root').innerHTML=`
 <div class="app">
   <header class="hdr">
     <span class="hdr-ico"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="2.5" fill="currentColor"/><path d="M10 10 L18 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".7"/><path d="M10 10 L17 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".55"/><path d="M10 10 L14 18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".4"/><path d="M10 10 L5 17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".3"/><path d="M10 10 L2 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".2"/><path d="M10 10 L5 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".3"/><path d="M10 10 L13 1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".45"/></svg></span>
@@ -398,89 +340,48 @@ document.getElementById('root').innerHTML = `
     <button class="btn btn-sel" id="btn-sel">⊙ Observar do edifício selecionado</button>
     <button class="btn btn-primary" id="btn-point">◎ Observar de um ponto no mapa</button>
     <button class="btn btn-clear" id="btn-clear" style="display:none">✕ Limpar análise</button>
-
     <div class="divider"><span>Obstruções</span></div>
     <div class="toggle-row">
       <button class="toggle" id="toggle-obs"></button>
-      <span class="toggle-label">Usar obstruções (edifícios do projeto)</span>
+      <span class="toggle-label">Raycasting contra edifícios do projeto</span>
     </div>
-    <div class="info-box" id="info-obs">Carregando...</div>
-
+    <div class="info-box" id="info-obs">—</div>
     <div class="divider"><span>Parâmetros</span></div>
-    <div class="sl-grp">
-      <div class="sl-row"><span class="sl-lbl">Raio máximo</span><span class="sl-val" id="lbl-r">300m</span></div>
-      <input type="range" id="sl-r" min="50" max="1000" step="25" value="300"/>
-      <div class="sl-ticks"><span>50m</span><span>500m</span><span>1km</span></div>
-    </div>
-    <div class="sl-grp">
-      <div class="sl-row"><span class="sl-lbl">Abertura do cone</span><span class="sl-val" id="lbl-c">360° (View Rose)</span></div>
-      <input type="range" id="sl-c" min="10" max="360" step="5" value="360"/>
-      <div class="sl-ticks"><span>10°</span><span>180°</span><span>360°</span></div>
-    </div>
-    <div class="sl-grp" id="grp-dir" style="display:none">
-      <div class="sl-row"><span class="sl-lbl">Direção do cone</span><span class="sl-val" id="lbl-d">0°</span></div>
-      <input type="range" id="sl-d" min="0" max="355" step="5" value="0"/>
-      <div class="sl-ticks"><span>E</span><span>N/S</span><span>W</span></div>
-    </div>
-
+    <div class="sl-grp"><div class="sl-row"><span class="sl-lbl">Raio máximo</span><span class="sl-val" id="lbl-r">300m</span></div><input type="range" id="sl-r" min="50" max="1000" step="25" value="300"/><div class="sl-ticks"><span>50m</span><span>500m</span><span>1km</span></div></div>
+    <div class="sl-grp"><div class="sl-row"><span class="sl-lbl">Abertura do cone</span><span class="sl-val" id="lbl-c">360° (View Rose)</span></div><input type="range" id="sl-c" min="10" max="360" step="5" value="360"/><div class="sl-ticks"><span>10°</span><span>180°</span><span>360°</span></div></div>
+    <div class="sl-grp" id="grp-dir" style="display:none"><div class="sl-row"><span class="sl-lbl">Direção do cone</span><span class="sl-val" id="lbl-d">0°</span></div><input type="range" id="sl-d" min="0" max="355" step="5" value="0"/><div class="sl-ticks"><span>E</span><span>N/S</span><span>W</span></div></div>
     <div class="divider"><span>Faixas de distância</span></div>
     <div id="bands-wrap"></div>
   </div>
-  <footer class="ftr"><p>Raycasting 2° · Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v12</strong></p></footer>
+  <footer class="ftr"><p>100% Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v13</strong></p></footer>
 </div>`;
 
 // ── Wire ─────────────────────────────────────────────────────────────────────
-document.getElementById('btn-sel').addEventListener('click', fromSelectedBuilding);
-document.getElementById('btn-point').addEventListener('click', fromMapClick);
-document.getElementById('btn-clear').addEventListener('click', clearAll);
+document.getElementById('btn-sel').addEventListener('click',fromSel);
+document.getElementById('btn-point').addEventListener('click',fromMap);
+document.getElementById('btn-clear').addEventListener('click',clearAll);
+document.getElementById('toggle-obs').addEventListener('click',function(){S.useObs=!S.useObs;this.className='toggle'+(S.useObs?' on':'');scheduleRecompute();});
+document.getElementById('sl-r').addEventListener('input',e=>{S.radius=+e.target.value;document.getElementById('lbl-r').textContent=S.radius+'m';const ld=document.getElementById(`bd-${S.bands.length-1}`);if(ld)ld.value=S.radius;scheduleRecompute();});
+document.getElementById('sl-c').addEventListener('input',e=>{S.cone=+e.target.value;document.getElementById('lbl-c').textContent=S.cone>=359.9?'360° (View Rose)':S.cone+'°';document.getElementById('grp-dir').style.display=S.cone>=359.9?'none':'';scheduleRecompute();});
+document.getElementById('sl-d').addEventListener('input',e=>{S.coneDir=+e.target.value;document.getElementById('lbl-d').textContent=S.coneDir+'°';scheduleRecompute();});
 
-document.getElementById('toggle-obs').addEventListener('click', function() {
-  S.useObstructions = !S.useObstructions;
-  this.className = 'toggle' + (S.useObstructions ? ' on' : '');
-  scheduleRecompute();
-});
-
-document.getElementById('sl-r').addEventListener('input', e => {
-  S.radius = +e.target.value; document.getElementById('lbl-r').textContent = S.radius+'m';
-  const ld = document.getElementById(`bd-${S.bands.length-1}`); if(ld) ld.value = S.radius;
-  scheduleRecompute();
-});
-document.getElementById('sl-c').addEventListener('input', e => {
-  S.cone = +e.target.value;
-  document.getElementById('lbl-c').textContent = S.cone >= 359.9 ? '360° (View Rose)' : S.cone+'°';
-  document.getElementById('grp-dir').style.display = S.cone >= 359.9 ? 'none' : '';
-  scheduleRecompute();
-});
-document.getElementById('sl-d').addEventListener('input', e => {
-  S.coneDir = +e.target.value; document.getElementById('lbl-d').textContent = S.coneDir+'°'; scheduleRecompute();
-});
-
-const wrap = document.getElementById('bands-wrap');
-S.bands.forEach((band, i) => {
-  const isLast = i === S.bands.length-1;
-  const card = document.createElement('div'); card.className='band-card';
-  card.innerHTML = `<div class="band-hdr"><div class="swatch" id="sw-${i}" style="background:${band.color}"></div><span class="band-name">${band.label}</span><input type="color" id="bc-${i}" value="${band.color}"/></div>
-    <div class="brow"><span class="bmeta">Limite</span><input type="number" id="bd-${i}" value="${isLast?S.radius:band.dist}" min="10" max="1000" step="10" ${isLast?'disabled':''}/><span class="bmeta">m · Op.</span><input type="range" id="bo-${i}" class="thin" min=".05" max=".85" step=".05" value="${band.opacity}" style="flex:1"/><span class="bmeta" id="bol-${i}">${Math.round(band.opacity*100)}%</span></div>`;
+const wrap=document.getElementById('bands-wrap');
+S.bands.forEach((band,i)=>{
+  const isLast=i===S.bands.length-1;
+  const card=document.createElement('div');card.className='band-card';
+  card.innerHTML=`<div class="band-hdr"><div class="swatch" id="sw-${i}" style="background:${band.color}"></div><span class="band-name">${band.label}</span><input type="color" id="bc-${i}" value="${band.color}"/></div><div class="brow"><span class="bmeta">Limite</span><input type="number" id="bd-${i}" value="${isLast?S.radius:band.dist}" min="10" max="1000" step="10" ${isLast?'disabled':''}/><span class="bmeta">m · Op.</span><input type="range" id="bo-${i}" class="thin" min=".05" max=".85" step=".05" value="${band.opacity}" style="flex:1"/><span class="bmeta" id="bol-${i}">${Math.round(band.opacity*100)}%</span></div>`;
   wrap.appendChild(card);
-  document.getElementById(`bc-${i}`).addEventListener('input', e => { S.bands[i].color=e.target.value; document.getElementById(`sw-${i}`).style.background=e.target.value; scheduleRecompute(); });
-  if (!isLast) document.getElementById(`bd-${i}`).addEventListener('change', e => { S.bands[i].dist=+e.target.value; scheduleRecompute(); });
-  document.getElementById(`bo-${i}`).addEventListener('input', e => { S.bands[i].opacity=+e.target.value; document.getElementById(`bol-${i}`).textContent=Math.round(+e.target.value*100)+'%'; scheduleRecompute(); });
+  document.getElementById(`bc-${i}`).addEventListener('input',e=>{S.bands[i].color=e.target.value;document.getElementById(`sw-${i}`).style.background=e.target.value;scheduleRecompute();});
+  if(!isLast) document.getElementById(`bd-${i}`).addEventListener('change',e=>{S.bands[i].dist=+e.target.value;scheduleRecompute();});
+  document.getElementById(`bo-${i}`).addEventListener('input',e=>{S.bands[i].opacity=+e.target.value;document.getElementById(`bol-${i}`).textContent=Math.round(+e.target.value*100)+'%';scheduleRecompute();});
 });
 
-// Fallback mapSelectCoord
-giraffeState.addListener(['mapSelectCoord'], async () => {
-  if (!isListening) return;
-  const coord = giraffeState.get('mapSelectCoord'); if (!coord) return;
-  isListening = false;
-  S.observer = Array.isArray(coord) ? coord : [coord.lng, coord.lat];
-  S.observerLabel = 'Ponto no mapa'; S.observerFeatId = null;
-  renderObs(); await runCompute();
+giraffeState.addListener(['mapSelectCoord'],async()=>{
+  if(!isListening)return;const c=giraffeState.get('mapSelectCoord');if(!c)return;
+  isListening=false;S.observer=Array.isArray(c)?c:[c.lng,c.lat];S.observerLabel='Ponto no mapa';S.observerFeatId=null;renderObs();await runCompute();
 });
-
-// Info inicial
+giraffeState.addListener(['rawSections'],renderInfo);
 renderInfo();
-giraffeState.addListener(['rawSections'], renderInfo);
-
 </script>
 </body>
 </html>
