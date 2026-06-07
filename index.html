@@ -241,9 +241,8 @@ async function compute() {
     // Propriedades com altura
     shape.properties = {
       color: band.color,
-      _baseElevation: baseElev,
-      _height: 0.5, // espessura mínima para ser visível em 3D
-      _baseHeight: 0,
+      _baseHeight: baseElev,
+      _height: 0.5,
       _opacity: band.opacity,
     };
 
@@ -263,7 +262,7 @@ async function compute() {
   // Ponto observador
   const obsFeat = turf.point(obs, {
     color: '#ffffff',
-    _baseElevation: baseElev,
+    _baseHeight: baseElev,
     _height: 2,
   });
   await renderLayer(`${LO}_obs`, { type: 'FeatureCollection', features: [obsFeat] }, {
@@ -338,11 +337,8 @@ async function fromSel() {
     S.observer = c;
     S.observerLabel = 'Edifício selecionado';
     S.observerFeatId = f.properties?.id || null;
-    // Ler altura do edifício selecionado
-    const h  = f.properties?._height || 0;
-    const bh = f.properties?._baseHeight || 0;
-    const be = f.properties?._baseElevation || 0;
-    S.observerHeight = be + bh + h; // topo do edifício
+    // Ler Base Height do edifício selecionado
+    S.observerHeight = f.properties?._baseHeight || 0;
     renderObs(); await runCompute();
   } catch (e) { setStatus('error', String(e)); renderBtns(); }
 }
@@ -385,7 +381,7 @@ document.getElementById('root').innerHTML = `
     <div class="divider"><span>Faixas de distância</span></div>
     <div id="bands-wrap"></div>
   </div>
-  <footer class="ftr"><p>100% Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v14</strong></p></footer>
+  <footer class="ftr"><p>100% Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v15</strong></p></footer>
 </div>`;
 
 // ── Wire ─────────────────────────────────────────────────────────────────────
