@@ -133,15 +133,25 @@ function flattenToPolygons(features) {
 }
 
 // ─── Raycasting Turf.js puro ──────────────────────────────────────────────────
-function castRaysTurf(obsCoord, radiusM, coneAngle, coneDir, obstacles) {
+function castRaysTurf(obsCoord, radiusM, coneAngle, coneDir, obstacles, observerHeight) {
   const is360    = coneAngle >= 359.9;
   const half     = coneAngle / 2;
   const start    = is360 ? 0 : coneDir - half;
   const end      = is360 ? 360 : coneDir + half;
   const radiusKm = radiusM / 1000;
   const obsP     = turf.point(obsCoord);
-  const polys    = flattenToPolygons(obstacles);
-  const tips     = [];
+
+  // Filtrar: só obstáculos mais altos que o observador bloqueiam a visão
+  const tallEnough = obstacles.filter(f => {
+    const p = f.properties || {};
+    const buildingTop = (p._baseHeight || 0) + (p._height || p.height || 0);
+    // Se o edifício não tem altura definida, assume que obstrui (segurança)
+    if (buildingTop === 0) return true;
+    return buildingTop > observerHeight;
+  });
+
+  const polys = flattenToPolygons(tallEnough);
+  const tips  = [];
 
   for (let bearing = start; bearing <= end; bearing += RAY_STEP) {
     const farCoord = turf.destination(obsCoord, radiusKm, bearing, { units: 'kilometers' }).geometry.coordinates;
@@ -152,17 +162,16 @@ function castRaysTurf(obsCoord, radiusM, coneAngle, coneDir, obstacles) {
 
     for (const poly of polys) {
       try {
-        // Converter polígono em lineString do contorno para interseção
         const ring = turf.polygonToLine(poly);
         const hits = turf.lineIntersect(ray, ring);
         for (const hit of hits.features) {
           const d = turf.distance(obsP, hit, { units: 'kilometers' });
-          if (d > 0.001 && d < closestDist) { // >1m para evitar self-intersect
+          if (d > 0.001 && d < closestDist) {
             closestDist = d;
             closestPt = hit.geometry.coordinates;
           }
         }
-      } catch { /* geometria inválida */ }
+      } catch {}
     }
     tips.push(closestPt);
   }
@@ -206,7 +215,7 @@ async function compute() {
     S.obstCount = obstacles.length;
     if (obstacles.length > 0) {
       setStatus('compute', `Raycasting contra ${obstacles.length} obstáculos...`);
-      visPoly = castRaysTurf(obs, S.radius, S.cone, S.coneDir, obstacles);
+      visPoly = castRaysTurf(obs, S.radius, S.cone, S.coneDir, obstacles, S.observerHeight);
     } else {
       visPoly = makeOpenField(obs, S.radius, S.cone, S.coneDir);
     }
@@ -325,7 +334,8 @@ async function runCompute() {
   try {
     await compute();
     S.computeMs = Math.round(performance.now() - t0);
-    setStatus('done', S.useObs ? `${S.obstCount} obstáculos · ${S.computeMs}ms` : `Campo aberto · ${S.computeMs}ms`);
+    const hTxt = S.observerHeight > 0 ? ` · h=${Math.round(S.observerHeight)}m` : '';
+    setStatus('done', S.useObs ? `${S.obstCount} obstáculos${hTxt} · ${S.computeMs}ms` : `Campo aberto${hTxt} · ${S.computeMs}ms`);
   } catch (e) { console.error(e); setStatus('error', String(e)); }
   renderBtns();
 }
@@ -343,10 +353,16 @@ async function fromSel() {
     S.observer = c;
     S.observerLabel = 'Edifício selecionado';
     S.observerFeatId = f.properties?.id || null;
-    // Ler Base Height do edifício selecionado e atualizar slider
-    S.observerHeight = f.properties?._baseHeight || 0;
+    // Ler altura do elemento selecionado (tenta várias fontes)
+    const props = f.properties || {};
+    const bh = props._baseHeight || 0;
+    const ht = props._height || props.height || 0;
+    const coordZ = f.geometry?.coordinates?.[2] || 0;
+    // Usa o topo do edifício (base + altura), ou coordenada Z para pontos
+    S.observerHeight = (bh + ht) || coordZ || 0;
+    console.log('[Isovist] Altura do elemento:', { _baseHeight: bh, _height: ht, coordZ, total: S.observerHeight, props });
     const slH = document.getElementById('sl-h');
-    if (slH) { slH.value = S.observerHeight; document.getElementById('lbl-h').textContent = S.observerHeight.toFixed(0) + 'm'; }
+    if (slH) { slH.value = S.observerHeight; document.getElementById('lbl-h').textContent = Math.round(S.observerHeight) + 'm'; }
     renderObs(); await runCompute();
   } catch (e) { setStatus('error', String(e)); renderBtns(); }
 }
@@ -390,7 +406,7 @@ document.getElementById('root').innerHTML = `
     <div class="divider"><span>Faixas de distância</span></div>
     <div id="bands-wrap"></div>
   </div>
-  <footer class="ftr"><p>100% Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v16</strong></p></footer>
+  <footer class="ftr"><p>100% Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v17</strong></p></footer>
 </div>`;
 
 // ── Wire ─────────────────────────────────────────────────────────────────────
