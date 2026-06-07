@@ -193,12 +193,13 @@ function makeOpenField(obs, radiusM, coneAngle, coneDir) {
   return turf.polygon([[obs, ...pts, obs]]);
 }
 
-// ─── Renderizar layer com estilo (remove+add para garantir atualização de cor) ─
-async function renderLayer(name, fc, style) {
-  try { await rpc.invoke('removeTempLayer', [name]); } catch {}
-  try { await rpc.invoke('addTempLayerGeoJSON', [name, fc, style]); } catch(e) {
-    // Fallback: tenta updateTempLayerGeoJSON
-    try { await rpc.invoke('updateTempLayerGeoJSON', [name, fc]); } catch {}
+// ─── Renderizar via updateGeoJSONLayerContents (motor 3D nativo do Giraffe) ────
+// Cria layers permanentes que respeitam _baseHeight, _height, color, _opacity.
+async function renderLayer(name, fc) {
+  try {
+    await rpc.invoke('updateGeoJSONLayerContents', [name, fc]);
+  } catch(e) {
+    console.warn('[Isovist] renderLayer ' + name + ':', e);
   }
 }
 
@@ -250,48 +251,38 @@ async function compute() {
     // Propriedades com altura
     shape.properties = {
       color: band.color,
+      stroke: band.color,
+      strokeWidth: 1,
       _baseHeight: baseElev,
       _height: 0.5,
       _opacity: band.opacity,
+      layerId: `${LO}_f${bi}`,
     };
 
     const fc = { type: 'FeatureCollection', features: [shape] };
 
-    // Renderizar como fill-extrusion (3D) na altura configurada
-    await renderLayer(`${LO}_f${bi}`, fc, {
-      type: 'fill-extrusion',
-      paint: {
-        'fill-extrusion-color': band.color,
-        'fill-extrusion-opacity': band.opacity,
-        'fill-extrusion-base': baseElev,
-        'fill-extrusion-height': baseElev + 0.5,
-      }
-    });
-    // Contorno no chão (2D) para referência visual
-    await renderLayer(`${LO}_l${bi}`, fc, {
-      type: 'line',
-      paint: { 'line-color': band.color, 'line-width': 1.2, 'line-opacity': Math.min(band.opacity + 0.2, 1) }
-    });
+    // Renderizar via Giraffe nativo (respeita _baseHeight e _height em 3D)
+    await renderLayer(`${LO}_f${bi}`, fc);
   }
 
-  // Ponto observador
+  // Ponto observador via Giraffe nativo
   const obsFeat = turf.point(obs, {
     color: '#ffffff',
+    stroke: '#000000',
+    strokeWidth: 2,
     _baseHeight: baseElev,
     _height: 2,
+    layerId: `${LO}_obs`,
   });
-  await renderLayer(`${LO}_obs`, { type: 'FeatureCollection', features: [obsFeat] }, {
-    type: 'circle',
-    paint: { 'circle-color': '#fff', 'circle-radius': 6, 'circle-stroke-color': '#000', 'circle-stroke-width': 2 }
-  });
+  await renderLayer(`${LO}_obs`, { type: 'FeatureCollection', features: [obsFeat] });
 }
 
 async function clearLayers() {
   for (let i = 0; i < S.bands.length; i++) {
-    try { await rpc.invoke('removeTempLayer', [`${LO}_f${i}`]); } catch {}
-    try { await rpc.invoke('removeTempLayer', [`${LO}_l${i}`]); } catch {}
+    // Limpar layer Giraffe permanente (esvazia o conteúdo)
+    try { await rpc.invoke('updateGeoJSONLayerContents', [`${LO}_f${i}`, { type: 'FeatureCollection', features: [] }]); } catch {}
   }
-  try { await rpc.invoke('removeTempLayer', [`${LO}_obs`]); } catch {}
+  try { await rpc.invoke('updateGeoJSONLayerContents', [`${LO}_obs`, { type: 'FeatureCollection', features: [] }]); } catch {}
 }
 
 // ─── UI ───────────────────────────────────────────────────────────────────────
@@ -353,14 +344,15 @@ async function fromSel() {
     S.observer = c;
     S.observerLabel = 'Edifício selecionado';
     S.observerFeatId = f.properties?.id || null;
-    // Ler altura do elemento selecionado (tenta várias fontes)
+    // Ler altura do elemento selecionado
     const props = f.properties || {};
-    const bh = props._baseHeight || 0;
-    const ht = props._height || props.height || 0;
-    const coordZ = f.geometry?.coordinates?.[2] || 0;
-    // Usa o topo do edifício (base + altura), ou coordenada Z para pontos
-    S.observerHeight = (bh + ht) || coordZ || 0;
-    console.log('[Isovist] Altura do elemento:', { _baseHeight: bh, _height: ht, coordZ, total: S.observerHeight, props });
+    const bh = Number(props._baseHeight) || 0;
+    const ht = Number(props._height) || Number(props.height) || 0;
+    const be = Number(props._baseElevation) || 0;
+    const coordZ = Number(f.geometry?.coordinates?.[2]) || 0;
+    // Para ponto de observação: usa _baseHeight (onde o ponto está posicionado)
+    S.observerHeight = bh || (be + ht) || coordZ || 0;
+    console.log('[Isovist] Altura:', JSON.stringify({ _baseHeight: bh, _height: ht, _baseElevation: be, coordZ, result: S.observerHeight }));
     const slH = document.getElementById('sl-h');
     if (slH) { slH.value = S.observerHeight; document.getElementById('lbl-h').textContent = Math.round(S.observerHeight) + 'm'; }
     renderObs(); await runCompute();
@@ -406,7 +398,7 @@ document.getElementById('root').innerHTML = `
     <div class="divider"><span>Faixas de distância</span></div>
     <div id="bands-wrap"></div>
   </div>
-  <footer class="ftr"><p>100% Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v17</strong></p></footer>
+  <footer class="ftr"><p>100% Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v18</strong></p></footer>
 </div>`;
 
 // ── Wire ─────────────────────────────────────────────────────────────────────
