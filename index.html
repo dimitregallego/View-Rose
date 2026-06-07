@@ -193,13 +193,12 @@ function makeOpenField(obs, radiusM, coneAngle, coneDir) {
   return turf.polygon([[obs, ...pts, obs]]);
 }
 
-// ─── Renderizar via updateGeoJSONLayerContents (motor 3D nativo do Giraffe) ────
-// Cria layers permanentes que respeitam _baseHeight, _height, color, _opacity.
-async function renderLayer(name, fc) {
-  try {
-    await rpc.invoke('updateGeoJSONLayerContents', [name, fc]);
-  } catch(e) {
-    console.warn('[Isovist] renderLayer ' + name + ':', e);
+// ─── Renderizar via remove + addTempLayerGeoJSON (rápido, com estilo) ──────────
+async function renderLayer(name, fc, style) {
+  try { await rpc.invoke('removeTempLayer', [name]); } catch {}
+  try { await rpc.invoke('addTempLayerGeoJSON', [name, fc, style]); } catch(e) {
+    // Fallback
+    try { await rpc.invoke('updateTempLayerGeoJSON', [name, fc]); } catch {}
   }
 }
 
@@ -250,39 +249,44 @@ async function compute() {
 
     // Propriedades com altura
     shape.properties = {
-      color: band.color,
-      stroke: band.color,
-      strokeWidth: 1,
-      _baseHeight: baseElev,
-      _height: 0.5,
-      _opacity: band.opacity,
-      layerId: `${LO}_f${bi}`,
+      band: band.label,
+      distance: band.dist,
     };
 
     const fc = { type: 'FeatureCollection', features: [shape] };
 
-    // Renderizar via Giraffe nativo (respeita _baseHeight e _height em 3D)
-    await renderLayer(`${LO}_f${bi}`, fc);
+    // TESTE: fill-extrusion com altura hardcoded=50m + slider
+    const h = S.observerHeight || 50; // DEFAULT 50m PARA TESTE
+    await renderLayer(`${LO}_f${bi}`, fc, {
+      type: 'fill-extrusion',
+      paint: {
+        'fill-extrusion-color': band.color,
+        'fill-extrusion-opacity': band.opacity,
+        'fill-extrusion-base': h,
+        'fill-extrusion-height': h + 1,
+      }
+    });
+    // Contorno 2D no chão
+    await renderLayer(`${LO}_l${bi}`, fc, {
+      type: 'line',
+      paint: { 'line-color': band.color, 'line-width': 1.5, 'line-opacity': Math.min(band.opacity + 0.2, 1) }
+    });
   }
 
-  // Ponto observador via Giraffe nativo
-  const obsFeat = turf.point(obs, {
-    color: '#ffffff',
-    stroke: '#000000',
-    strokeWidth: 2,
-    _baseHeight: baseElev,
-    _height: 2,
-    layerId: `${LO}_obs`,
+  // Ponto observador
+  const obsFeat = turf.point(obs);
+  await renderLayer(`${LO}_obs`, { type: 'FeatureCollection', features: [obsFeat] }, {
+    type: 'circle',
+    paint: { 'circle-color': '#fff', 'circle-radius': 6, 'circle-stroke-color': '#000', 'circle-stroke-width': 2 }
   });
-  await renderLayer(`${LO}_obs`, { type: 'FeatureCollection', features: [obsFeat] });
 }
 
 async function clearLayers() {
   for (let i = 0; i < S.bands.length; i++) {
-    // Limpar layer Giraffe permanente (esvazia o conteúdo)
-    try { await rpc.invoke('updateGeoJSONLayerContents', [`${LO}_f${i}`, { type: 'FeatureCollection', features: [] }]); } catch {}
+    try { await rpc.invoke('removeTempLayer', [`${LO}_f${i}`]); } catch {}
+    try { await rpc.invoke('removeTempLayer', [`${LO}_l${i}`]); } catch {}
   }
-  try { await rpc.invoke('updateGeoJSONLayerContents', [`${LO}_obs`, { type: 'FeatureCollection', features: [] }]); } catch {}
+  try { await rpc.invoke('removeTempLayer', [`${LO}_obs`]); } catch {}
 }
 
 // ─── UI ───────────────────────────────────────────────────────────────────────
@@ -398,7 +402,7 @@ document.getElementById('root').innerHTML = `
     <div class="divider"><span>Faixas de distância</span></div>
     <div id="bands-wrap"></div>
   </div>
-  <footer class="ftr"><p>100% Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v18</strong></p></footer>
+  <footer class="ftr"><p>100% Turf.js · Giraffe iFrame SDK · <strong style="color:#00ACCD">v19-test</strong></p></footer>
 </div>`;
 
 // ── Wire ─────────────────────────────────────────────────────────────────────
